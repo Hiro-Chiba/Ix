@@ -22,6 +22,8 @@ const PID_FILE = join(IX_HOME, "compass.pid");
 // `ix view` launched from a different workspace can warn instead of silently showing the
 // already-running (differently-scoped) instance.
 const SCOPE_FILE = join(IX_HOME, "compass.scope");
+const PORT_FILE = join(IX_HOME, "compass.port");
+const SERVER_SCRIPT_FILE = join(IX_HOME, "tmp", "compass-server.js");
 const BACKEND_URL = "http://localhost:8090";
 
 /** Resolve the compass dist directory — installed path first, then dev fallback. */
@@ -38,18 +40,59 @@ function findCompassDist(): string | null {
   return null;
 }
 
+function removeCompassState(): void {
+  for (const path of [PID_FILE, SCOPE_FILE, PORT_FILE]) {
+    try { unlinkSync(path); } catch { /* ignore */ }
+  }
+}
+
+function parsePort(value: string): number | null {
+  const port = Number(value.trim());
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
+/** Read the persisted port, falling back to the server script written by older releases. */
+function readRunningPort(): number | null {
+  if (existsSync(PORT_FILE)) {
+    try {
+      const port = parsePort(readFileSync(PORT_FILE, "utf-8"));
+      if (port !== null) return port;
+    } catch {
+      // Fall through to the legacy server script.
+    }
+  }
+
+  if (!existsSync(SERVER_SCRIPT_FILE)) return null;
+  try {
+    const match = readFileSync(SERVER_SCRIPT_FILE, "utf-8").match(/^const PORT = (\d+);$/m);
+    const port = match?.[1] ? parsePort(match[1]) : null;
+    if (port !== null) {
+      // Best-effort migration for a visualizer started before compass.port existed.
+      try { writeFileSync(PORT_FILE, String(port)); } catch { /* ignore */ }
+    }
+    return port;
+  } catch {
+    return null;
+  }
+}
+
 /** Read PID from file and check if the process is alive. */
 function readAlivePid(): number | null {
-  if (!existsSync(PID_FILE)) return null;
-  const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
-  if (isNaN(pid)) return null;
+  if (!existsSync(PID_FILE)) {
+    removeCompassState();
+    return null;
+  }
+  const pid = Number(readFileSync(PID_FILE, "utf-8").trim());
+  if (!Number.isInteger(pid) || pid <= 0) {
+    removeCompassState();
+    return null;
+  }
   try {
     process.kill(pid, 0); // signal 0 = existence check
     return pid;
   } catch {
     // Stale PID file
-    try { unlinkSync(PID_FILE); } catch { /* ignore */ }
-    try { unlinkSync(SCOPE_FILE); } catch { /* ignore */ }
+    removeCompassState();
     return null;
   }
 }
@@ -243,7 +286,13 @@ export function registerViewCommand(program: Command): void {
       const existing = readAlivePid();
       if (existing) {
         console.log(`[ok] Visualizer is already running (PID ${existing})`);
-        console.log(`  http://localhost:${port}`);
+        const runningPort = readRunningPort();
+        if (runningPort !== null) {
+          console.log(`  http://localhost:${runningPort}`);
+        } else {
+          console.log("[!] The running visualizer's port is unknown.");
+          console.log("    Run 'ix view stop' then 'ix view' to restart it.");
+        }
         // The running instance has a fixed scope (baked at launch). If this directory
         // maps to a different workspace, say so rather than silently showing the old one.
         const runningKey = existsSync(SCOPE_FILE) ? readFileSync(SCOPE_FILE, "utf-8").trim() : null;
@@ -282,13 +331,12 @@ export function registerViewCommand(program: Command): void {
       }
 
       // Write server script to temp location
-      const scriptDir = join(IX_HOME, "tmp");
+      const scriptDir = dirname(SERVER_SCRIPT_FILE);
       mkdirSync(scriptDir, { recursive: true });
-      const scriptPath = join(scriptDir, "compass-server.js");
-      writeFileSync(scriptPath, serverScript(distDir, port, workspaceId, systemId));
+      writeFileSync(SERVER_SCRIPT_FILE, serverScript(distDir, port, workspaceId, systemId));
 
       // Spawn detached process
-      const child = spawn("node", [scriptPath], {
+      const child = spawn("node", [SERVER_SCRIPT_FILE], {
         detached: true,
         stdio: "ignore",
       });
@@ -299,10 +347,11 @@ export function registerViewCommand(program: Command): void {
         process.exit(1);
       }
 
-      // Save PID + the scope it was launched with (for the mismatch warning above).
+      // Save PID, scope, and port for subsequent start/status/stop commands.
       mkdirSync(dirname(PID_FILE), { recursive: true });
       writeFileSync(PID_FILE, String(child.pid));
       writeFileSync(SCOPE_FILE, scopeKey);
+      writeFileSync(PORT_FILE, String(port));
 
       const url = `http://localhost:${port}`;
       console.log(`[ok] Visualizer started (PID ${child.pid})`);
@@ -336,8 +385,7 @@ export function registerViewCommand(program: Command): void {
         // Already dead
       }
 
-      try { unlinkSync(PID_FILE); } catch { /* ignore */ }
-      try { unlinkSync(SCOPE_FILE); } catch { /* ignore */ }
+      removeCompassState();
       console.log(`[ok] Visualizer stopped (PID ${pid})`);
     });
 
