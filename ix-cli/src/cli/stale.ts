@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { IxClient } from "../client/api.js";
+import type { IxClient } from "../client/api.js";
+import { resolveWorkspaceRoot } from "./config.js";
+import { loadIngestBaseline } from "./ingest-baseline.js";
 import { SUPPORTED_EXTENSIONS } from "./supported-extensions.js";
 
 export interface StaleInfo {
@@ -57,37 +59,44 @@ function collectFiles(dir: string, limit: number = 5000): string[] {
   return results;
 }
 
+function differsFromIngestBaseline(
+  filePath: string,
+  mtimeMs: number,
+  ingestedMtimes: Map<string, number>,
+  lastIngestAt: string,
+): boolean {
+  const ingestedMtime = ingestedMtimes.get(filePath);
+  return ingestedMtime === undefined
+    ? mtimeMs > Date.parse(lastIngestAt)
+    : ingestedMtime !== mtimeMs;
+}
+
 /**
  * Detect files that have been modified since the last ingest.
- * Uses mtime comparison against the latest patch timestamp.
+ * Uses the workspace-local ingest baseline so another workspace cannot advance it.
  */
 export async function detectStaleFiles(
-  client: IxClient,
+  _client: IxClient,
   root: string,
   maxSamples: number = 5
 ): Promise<StaleInfo> {
-  // Get latest patch to determine last ingest time
-  const patches = await client.listPatches({ limit: 1 });
-  const stats = await client.stats();
-
-  const lastPatch = patches[0];
-  const lastIngestAt = lastPatch?.timestamp ?? null;
-  const currentRev = lastPatch?.rev ?? 0;
-
-  if (!lastIngestAt) {
+  const workspaceRoot = path.resolve(root);
+  const baseline = loadIngestBaseline(workspaceRoot);
+  if (!baseline) {
     return { lastIngestAt: null, currentRev: 0, staleFiles: 0, sampleChangedFiles: [] };
   }
 
-  const lastIngestTime = new Date(lastIngestAt).getTime();
-  const files = collectFiles(root);
+  const files = collectFiles(workspaceRoot);
   const changedFiles: string[] = [];
 
   for (const filePath of files) {
     try {
       const stat = fs.statSync(filePath);
-      if (stat.mtimeMs > lastIngestTime) {
+      if (
+        differsFromIngestBaseline(filePath, stat.mtimeMs, baseline.files, baseline.lastIngestAt)
+      ) {
         // Make path relative to root for display
-        const relative = path.relative(root, filePath);
+        const relative = path.relative(workspaceRoot, filePath);
         changedFiles.push(relative);
       }
     } catch {
@@ -96,30 +105,34 @@ export async function detectStaleFiles(
   }
 
   return {
-    lastIngestAt,
-    currentRev,
+    lastIngestAt: baseline.lastIngestAt,
+    currentRev: baseline.currentRev,
     staleFiles: changedFiles.length,
     sampleChangedFiles: changedFiles.slice(0, maxSamples),
   };
 }
 
 /**
- * Check if a specific file path is stale (modified since last ingest).
+ * Check if a specific file path differs from the active workspace's ingest baseline.
  */
 export async function isFileStale(
-  client: IxClient,
+  _client: IxClient,
   filePath: string
 ): Promise<boolean> {
   if (!fs.existsSync(filePath)) return false;
 
-  const patches = await client.listPatches({ limit: 1 });
-  const lastPatch = patches[0];
-  if (!lastPatch?.timestamp) return false;
+  const workspaceRoot = path.resolve(resolveWorkspaceRoot());
+  const baseline = loadIngestBaseline(workspaceRoot);
+  if (!baseline) return false;
 
-  const lastIngestTime = new Date(lastPatch.timestamp).getTime();
   try {
-    const stat = fs.statSync(filePath);
-    return stat.mtimeMs > lastIngestTime;
+    const absolutePath = path.resolve(filePath);
+    return differsFromIngestBaseline(
+      absolutePath,
+      fs.statSync(absolutePath).mtimeMs,
+      baseline.files,
+      baseline.lastIngestAt,
+    );
   } catch {
     return false;
   }

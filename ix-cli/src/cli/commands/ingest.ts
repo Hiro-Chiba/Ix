@@ -10,7 +10,8 @@ import { ParsePool } from './parse-pool.js';
 import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
-import { getEndpoint, resolveWorkspaceRoot, ingestMtimeCachePath } from '../config.js';
+import { getEndpoint, resolveWorkspaceRoot } from '../config.js';
+import { loadIngestBaseline, saveIngestBaseline } from '../ingest-baseline.js';
 import { resolveGitHubToken } from '../github/auth.js';
 import { parseGitHubRepo, fetchGitHubData } from '../github/fetch.js';
 import { loadIngestionModules } from './ingestion-loader.js';
@@ -304,31 +305,21 @@ async function retryOnConflict<T>(fn: () => Promise<T>, maxRetries: number): Pro
 // Mtime cache — skip readFileSync+sha256 for unchanged files
 // ---------------------------------------------------------------------------
 
-interface MtimeCache {
-  root: string;
-  files: Record<string, number>; // absolute path → mtime (ms)
-}
-
 function loadMtimeCache(projectRoot: string): Map<string, number> {
-  try {
-    const raw = fs.readFileSync(ingestMtimeCachePath(projectRoot), 'utf-8');
-    const data = JSON.parse(raw) as MtimeCache;
-    if (data.root !== projectRoot) return new Map();
-    return new Map(Object.entries(data.files));
-  } catch {
-    return new Map();
-  }
+  return loadIngestBaseline(projectRoot)?.files ?? new Map();
 }
 
-function saveMtimeCache(projectRoot: string, mtimes: Map<string, number>): void {
-  try {
-    const dir = nodePath.join(os.homedir(), '.ix');
-    fs.mkdirSync(dir, { recursive: true });
-    const data: MtimeCache = { root: projectRoot, files: Object.fromEntries(mtimes) };
-    fs.writeFileSync(ingestMtimeCachePath(projectRoot), JSON.stringify(data));
-  } catch {
-    // Non-critical: ignore write errors
-  }
+export function persistIngestBaselineIfClean(
+  projectRoot: string,
+  mtimes: Map<string, number>,
+  currentRev: number,
+  parseErrors: number,
+  commitErrors: number,
+  now?: Date,
+): boolean {
+  if (!ingestCompletedCleanly(parseErrors, commitErrors) || mtimes.size === 0) return false;
+  saveIngestBaseline(projectRoot, mtimes, currentRev, now);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1361,9 +1352,13 @@ export async function ingestFiles(
     // three guards would start caching mtimes for files whose patches never
     // landed. The next run would skip them as unchanged and they would stay
     // missing from the graph until a --force.
-    if (!opts.force && ingestCompletedCleanly(parseErrors, commitErrors) && currentMtimes.size > 0) {
-      saveMtimeCache(projectRoot, currentMtimes);
-    }
+    persistIngestBaselineIfClean(
+      projectRoot,
+      currentMtimes,
+      latestRev,
+      parseErrors,
+      commitErrors,
+    );
 
     // Migration cleanup (Ix#225 gap 2): the re-ingest under the new path-based id has
     // committed, so delete the OLD id's now-orphaned nodes/edges/patches. Best-effort —
