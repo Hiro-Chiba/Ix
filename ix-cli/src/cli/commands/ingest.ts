@@ -351,6 +351,13 @@ function renderProgressLine(phase: string, current: number, total: number): stri
   return `  ${phase.padEnd(8)}  ${bar}  ${pctStr}  ${count}`.padEnd(PROG_LINE_WIDTH);
 }
 
+export function shouldRenderIngestProgress(
+  format: string,
+  stderrIsTTY: boolean | undefined,
+): boolean {
+  return format === 'text' && stderrIsTTY === true;
+}
+
 // ---------------------------------------------------------------------------
 // Command registration
 // ---------------------------------------------------------------------------
@@ -700,7 +707,7 @@ export async function ingestFiles(
   let progressTotal   = 0;
   let progressStart   = performance.now();
 
-  const interval = opts.format === 'text' ? setInterval(() => {
+  const interval = shouldRenderIngestProgress(opts.format, process.stderr.isTTY) ? setInterval(() => {
     if (debug && currentWorkLabel) {
       const workElapsed = performance.now() - currentWorkStart;
       if (workElapsed >= SLOW_WORK_LOG_MS && (lastSlowWorkNotice === 0 || workElapsed - lastSlowWorkNotice >= SLOW_WORK_REPEAT_MS)) {
