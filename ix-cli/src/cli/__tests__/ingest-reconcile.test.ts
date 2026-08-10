@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as nodePath from "node:path";
 
 import type { GraphPatchPayload } from "../../client/types.js";
 import {
@@ -33,27 +34,31 @@ describe("reconcileRemovedEntities", () => {
   });
 
   it("reingests surviving dependents when a deleted file returns", () => {
+    const projectRoot = nodePath.resolve("workspace");
+    const returnedPath = nodePath.join(projectRoot, "src", "returned.ts");
+    const callerPath = nodePath.join(projectRoot, "src", "caller.ts");
+    const stillDeletedPath = nodePath.join(projectRoot, "src", "still-deleted.ts");
     const deletedFiles = new Map([
       ["src/returned.ts", ["src/caller.ts", "src/missing.ts"]],
       ["src/still-deleted.ts", ["src/other.ts"]],
     ]);
 
     const plan = planDeletedFileRecovery(
-      "/workspace",
-      ["/workspace/src/returned.ts", "/workspace/src/caller.ts"],
+      projectRoot,
+      [returnedPath, callerPath],
       deletedFiles,
     );
 
-    expect(plan.recreatedPaths).toEqual(["/workspace/src/returned.ts"]);
+    expect(plan.recreatedPaths).toEqual([returnedPath]);
     expect(plan.previousDeletedFiles).toEqual(
       new Map([
-        ["/workspace/src/returned.ts", ["src/caller.ts", "src/missing.ts"]],
-        ["/workspace/src/still-deleted.ts", ["src/other.ts"]],
+        [returnedPath, ["src/caller.ts", "src/missing.ts"]],
+        [stillDeletedPath, ["src/other.ts"]],
       ]),
     );
-    expect(plan.forceReingestPaths).toEqual(new Set(["/workspace/src/caller.ts"]));
+    expect(plan.forceReingestPaths).toEqual(new Set([callerPath]));
     expect(plan.nextDeletedFiles).toEqual(
-      new Map([["/workspace/src/still-deleted.ts", ["src/other.ts"]]]),
+      new Map([[stillDeletedPath, ["src/other.ts"]]]),
     );
   });
 
