@@ -313,6 +313,14 @@ export async function reconcileRemovedEntities(
   patch: GraphPatchPayload,
   previousPatchIds: string[],
   dependentSourceUris?: Set<string>,
+  // `ix map` does not write chunks: stripMapModeOps drops every chunk UpsertNode
+  // from the patch. It does NOT drop DeleteNode, and chunk ids hash the chunk's
+  // start line, so any edit that shifts lines makes every downstream chunk look
+  // removed. Reconciling without this flag therefore had `ix map` after an
+  // `ix ingest` delete the file's chunks and never recreate them — the cheaper
+  // command silently destroying embedding data the expensive one built. Chunks
+  // are not map mode's to reconcile, so in map mode they are left alone.
+  mapMode = false,
 ): Promise<GraphPatchPayload> {
   const previous = await loadStoredPatchEntities(client, previousPatchIds);
   const currentNodeIds = new Set(
@@ -327,19 +335,32 @@ export async function reconcileRemovedEntities(
       .map(op => op['id'])
       .filter((id): id is string => typeof id === 'string'),
   );
-  const removedNodeIds = previous.nodeIds.filter(id => !currentNodeIds.has(id));
+  const candidateNodeIds = previous.nodeIds.filter(id => !currentNodeIds.has(id));
+  const removedNodeIds: string[] = [];
   const removedEdgeIds = new Set<string>();
+  const CHUNK_PREDICATES = new Set(['CONTAINS_CHUNK', 'NEXT']);
 
-  for (const nodeId of removedNodeIds) {
+  for (const nodeId of candidateNodeIds) {
     try {
       const entity = await client.entity(nodeId);
+      // The lookup is already being made for the incident edges, so the kind
+      // costs nothing extra. A node whose kind cannot be read (404 — already
+      // gone) falls through to the delete, which is a no-op server-side.
+      if (mapMode && (entity.node as { kind?: unknown } | undefined)?.kind === 'chunk') {
+        continue;
+      }
+      removedNodeIds.push(nodeId);
       for (const edge of entity.edges ?? []) {
         const edgeRecord = edge as {
           id?: unknown;
           provenance?: { sourceUri?: unknown; source_uri?: unknown };
         };
         const edgeId = edgeRecord.id;
-        if (typeof edgeId === 'string' && !currentEdgeIds.has(edgeId)) removedEdgeIds.add(edgeId);
+        const predicate = (edge as { predicate?: unknown }).predicate;
+        const isChunkEdge = typeof predicate === 'string' && CHUNK_PREDICATES.has(predicate);
+        if (typeof edgeId === 'string' && !currentEdgeIds.has(edgeId) && !(mapMode && isChunkEdge)) {
+          removedEdgeIds.add(edgeId);
+        }
         const sourceUri = edgeRecord.provenance?.sourceUri ?? edgeRecord.provenance?.source_uri;
         if (
           dependentSourceUris &&
@@ -351,6 +372,9 @@ export async function reconcileRemovedEntities(
       }
     } catch (err) {
       if (!String(err).includes('404:')) throw err;
+      // Already absent. Emitting the delete anyway keeps the patch a complete
+      // statement of intent and costs nothing.
+      removedNodeIds.push(nodeId);
     }
   }
 
@@ -470,6 +494,17 @@ export function persistIngestBaselineIfClean(
   deletedFiles: Map<string, string[]> = new Map(),
 ): boolean {
   if (!ingestCompletedCleanly(parseErrors, commitErrors)) return false;
+  // An empty mtime map is normally a discovery failure, not an empty repo —
+  // an over-broad ignore rule, the wrong cwd, a glob that matched nothing —
+  // and persisting it silently discards the baseline, forcing a full re-ingest
+  // next run. The original guard rejected every empty map for that reason.
+  //
+  // But deleting the last mapped file legitimately produces one, and refusing
+  // to record that leaves the baseline claiming files that are gone. So the
+  // guard now asks *why* the map is empty: with deletions recorded this run,
+  // empty is a real state and is persisted; without them, it is still treated
+  // as discovery having gone wrong.
+  if (mtimes.size === 0 && deletedFiles.size === 0) return false;
   saveIngestBaseline(projectRoot, mtimes, currentRev, now, deletedFiles);
   return true;
 }
@@ -1029,15 +1064,27 @@ export async function ingestFiles(
     const hashLookupPaths = opts.force
       ? [...filePaths, ...deletedPaths]
       : [...mtimeChangedPaths, ...deletedPaths];
+    // Deleting from an unreliable baseline is how data gets lost, so the lookup
+    // fails closed when deletions are pending — but only the *deletions* need
+    // that guarantee. Letting the throw escape aborted the entire map over one
+    // transient blip, taking the ordinary ingest of every changed file with it.
+    // So catch it here: drop the deletions for this run (they stay in the
+    // baseline and are retried next time) and let the rest proceed.
     if (hashLookupPaths.length > 0) {
-      knownHashes = await loadExistingHashes(
-        client,
-        hashLookupPaths,
-        toWorkspaceRelative,
-        sourceWorkspaceIdOf,
-        debug,
-        deletedPaths.length > 0,
-      );
+      try {
+        knownHashes = await loadExistingHashes(
+          client,
+          hashLookupPaths,
+          toWorkspaceRelative,
+          sourceWorkspaceIdOf,
+          debug,
+          deletedPaths.length > 0,
+        );
+      } catch (err) {
+        if (debug) process.stderr.write(`\n  [deletion cleanup skipped] hash lookup failed: ${err}\n`);
+        deletedPaths.length = 0;
+        knownHashes = new Map();
+      }
       if (debug) process.stderr.write(`\n  Source hash lookup: ${knownHashes.size} known hashes (${mtimeChangedPaths.length} mtime-changed)\n`);
     } else {
       // All files are mtime-clean — skip server round-trip entirely.
@@ -1262,6 +1309,8 @@ export async function ingestFiles(
                 client,
                 patch,
                 sourcePatchIdCandidates(p.filePath, previousHash, fileWorkspace),
+                undefined,
+                mapMode,
               );
             }
             if (mapMode) patch = stripMapModeOps(patch);
@@ -1339,6 +1388,8 @@ export async function ingestFiles(
                 client,
                 patch,
                 sourcePatchIdCandidates(p.filePath, previousHash, fileWorkspace),
+                undefined,
+                mapMode,
               );
             }
             if (mapMode) patch = stripMapModeOps(patch);
@@ -1630,6 +1681,7 @@ export async function ingestFiles(
             patch,
             sourcePatchIdCandidates(relFilePath, previousHash, fileWorkspace),
             dependentSourceUris,
+            mapMode,
           );
           if (mapMode) patch = stripMapModeOps(patch);
           deletedPatches.push(makePreparedPatch(patch, i + 1, relFilePath));

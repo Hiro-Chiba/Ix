@@ -180,6 +180,26 @@ describe("workspace-scoped staleness", () => {
     });
   });
 
+  it("refuses an empty baseline when nothing was deleted", () => {
+    // An empty mtime map with no deletions is a discovery failure — an
+    // over-broad ignore rule, the wrong cwd — and persisting it silently
+    // discards the baseline, forcing a full re-ingest next run.
+    const root = path.join(home, "discovery-failure");
+    const filePath = writeSource(root, "kept.js", "export const value = 1;\n");
+    persistIngestBaselineIfClean(
+      root,
+      new Map([[filePath, fs.statSync(filePath).mtimeMs]]),
+      20,
+      0,
+      0,
+      new Date("2026-08-10T18:00:00.000Z"),
+    );
+
+    expect(persistIngestBaselineIfClean(root, new Map(), 21, 0, 0)).toBe(false);
+    expect(loadIngestBaseline(root)?.files.size).toBe(1);
+    expect(loadIngestBaseline(root)?.currentRev).toBe(20);
+  });
+
   it("uses ingest time for files absent from the mtime cache", async () => {
     const root = path.join(home, "partial-cache");
     const mappedFile = writeSource(root, "mapped.js", "export const mapped = true;\n");

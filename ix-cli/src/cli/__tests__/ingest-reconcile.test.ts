@@ -140,6 +140,70 @@ describe("reconcileRemovedEntities", () => {
     expect(entity).not.toHaveBeenCalled();
   });
 
+  it("does not delete chunk nodes in map mode", async () => {
+    // stripMapModeOps drops chunk UpsertNodes but keeps DeleteNode, and chunk
+    // ids hash the start line — so any edit that shifts lines made every
+    // downstream chunk look removed. Without this guard, `ix map` after an
+    // `ix ingest` deleted the file's chunks and never recreated them.
+    const getPatch = vi.fn().mockResolvedValue({
+      data: { entityIds: ["file-node", "chunk-L1", "chunk-L10"], nodeOpCount: 3, edgeOpCount: 0 },
+    });
+    const entity = vi.fn().mockImplementation(async (id: string) => ({
+      node: { kind: id.startsWith("chunk") ? "chunk" : "function" },
+      claims: [],
+      edges: [],
+    }));
+    const patch = patchWith([
+      { type: "UpsertNode", id: "file-node", kind: "file", name: "example.ts" },
+      { type: "UpsertNode", id: "chunk-L1", kind: "chunk", name: "a" },
+      { type: "UpsertNode", id: "chunk-L12", kind: "chunk", name: "b" },
+    ]);
+
+    const reconciled = await reconcileRemovedEntities(
+      { getPatch, entity }, patch, ["prev"], undefined, true,
+    );
+
+    const deleted = reconciled.ops.filter(o => o.type === "DeleteNode").map(o => o["id"]);
+    expect(deleted).toEqual([]);
+  });
+
+  it("still deletes chunk nodes outside map mode", async () => {
+    const getPatch = vi.fn().mockResolvedValue({
+      data: { entityIds: ["file-node", "chunk-L10"], nodeOpCount: 2, edgeOpCount: 0 },
+    });
+    const entity = vi.fn().mockResolvedValue({ node: { kind: "chunk" }, claims: [], edges: [] });
+    const patch = patchWith([
+      { type: "UpsertNode", id: "file-node", kind: "file", name: "example.ts" },
+    ]);
+
+    const reconciled = await reconcileRemovedEntities({ getPatch, entity }, patch, ["prev"]);
+
+    const deleted = reconciled.ops.filter(o => o.type === "DeleteNode").map(o => o["id"]);
+    expect(deleted).toEqual(["chunk-L10"]);
+  });
+
+  it("leaves chunk-carrying edges alone in map mode", async () => {
+    const getPatch = vi.fn().mockResolvedValue({
+      data: { entityIds: ["gone"], nodeOpCount: 1, edgeOpCount: 0 },
+    });
+    const entity = vi.fn().mockResolvedValue({
+      node: { kind: "function" },
+      claims: [],
+      edges: [
+        { id: "contains-chunk", predicate: "CONTAINS_CHUNK", provenance: {} },
+        { id: "next-chunk", predicate: "NEXT", provenance: {} },
+        { id: "calls-edge", predicate: "CALLS", provenance: {} },
+      ],
+    });
+
+    const reconciled = await reconcileRemovedEntities(
+      { getPatch, entity }, patchWith([]), ["prev"], undefined, true,
+    );
+
+    const deletedEdges = reconciled.ops.filter(o => o.type === "DeleteEdge").map(o => o["id"]);
+    expect(deletedEdges).toEqual(["calls-edge"]);
+  });
+
   it("fails closed when the previous patch has no entity manifest", async () => {
     const getPatch = vi.fn().mockResolvedValue({ data: {} });
     const entity = vi.fn();
