@@ -1040,26 +1040,49 @@ export const PHP_QUERIES = `
 ; Constructor call: new User()
 (object_creation_expression (name) @call.name) @call
 
-; Typed properties: private Service $service
+; Typed properties: private Service $s / private ?Service $s
+;
+; ?Service is NOT a named_type -- tree-sitter-php wraps it as
+; (optional_type (named_type (name))). Matching only named_type silently drops
+; every nullable dependency back to a bare method name, which is most of them in
+; modern PHP. Union types (Service|Repo) are deliberately left out: there is no
+; single receiver type to attribute the call to, so a bare name is the honest
+; answer there.
 (property_declaration
-  type: (named_type (name) @_typed_var_type)
+  type: [(named_type (name) @_typed_var_type)
+         (optional_type (named_type (name) @_typed_var_type))]
   (property_element
     name: (variable_name (name) @_typed_var_name))) @_typed_var_scope
 
-; Constructor-promoted properties: private Service $service
+; Constructor-promoted properties: private ?Service $service
 (property_promotion_parameter
-  type: (named_type (name) @_typed_var_type)
+  type: [(named_type (name) @_typed_var_type)
+         (optional_type (named_type (name) @_typed_var_type))]
   name: (variable_name (name) @_typed_var_name)) @_typed_var_scope
 
-; Typed method parameters: function run(Service $service)
-(method_declaration
-  parameters: (formal_parameters
-    [(simple_parameter
-      type: (named_type (name) @_typed_param_type)
-      name: (variable_name (name) @_typed_param_name))
-     (property_promotion_parameter
-      type: (named_type (name) @_typed_param_type)
-      name: (variable_name (name) @_typed_param_name))])) @_typed_param_scope
+; Typed parameters on methods AND plain functions: function run(?Service $s)
+;
+; function_definition is a separate node from method_declaration, so rooting
+; this at method_declaration alone left every top-level function's parameters
+; untyped. The handler needs no change: childForFieldName('name') works on both,
+; and with no enclosing class the scope becomes the bare function name — which is
+; exactly what findEnclosingFunction returns for a top-level function.
+[(method_declaration
+   parameters: (formal_parameters
+     [(simple_parameter
+       type: [(named_type (name) @_typed_param_type)
+              (optional_type (named_type (name) @_typed_param_type))]
+       name: (variable_name (name) @_typed_param_name))
+      (property_promotion_parameter
+       type: [(named_type (name) @_typed_param_type)
+              (optional_type (named_type (name) @_typed_param_type))]
+       name: (variable_name (name) @_typed_param_name))]))
+ (function_definition
+   parameters: (formal_parameters
+     (simple_parameter
+       type: [(named_type (name) @_typed_param_type)
+              (optional_type (named_type (name) @_typed_param_type))]
+       name: (variable_name (name) @_typed_param_name))))] @_typed_param_scope
 
 ; ── Heritage: extends ────────────────────────────────────────────────────────
 (class_declaration

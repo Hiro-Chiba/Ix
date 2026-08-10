@@ -99,4 +99,83 @@ function run($service): void
       predicate: 'CALLS',
     });
   });
+
+  it('resolves nullable declared types', () => {
+    // `?Service` parses as (optional_type (named_type (name))), not named_type.
+    // Matching only the latter dropped every nullable dependency to a bare name.
+    const result = parseFile(
+      '/repo/Nullable.php',
+      `<?php
+final class Nullable
+{
+    private ?Service $service;
+
+    public function __construct(private ?Repository $repository) {}
+
+    public function run(?Logger $logger): void
+    {
+        $this->service->create();
+        $this->repository->find();
+        $logger->write();
+    }
+}
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.relationships).toEqual(
+      expect.arrayContaining([
+        { srcName: 'Nullable.run', dstName: 'Service.create', predicate: 'CALLS' },
+        { srcName: 'Nullable.run', dstName: 'Repository.find', predicate: 'CALLS' },
+        { srcName: 'Nullable.run', dstName: 'Logger.write', predicate: 'CALLS' },
+      ]),
+    );
+  });
+
+  it('resolves typed parameters on plain functions, not just methods', () => {
+    // function_definition is a separate node from method_declaration; rooting the
+    // parameter query at the latter alone left top-level functions untyped.
+    const result = parseFile(
+      '/repo/Standalone.php',
+      `<?php
+function run(Service $service, ?Logger $logger): void
+{
+    $service->create();
+    $logger->write();
+}
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.relationships).toEqual(
+      expect.arrayContaining([
+        { srcName: 'run', dstName: 'Service.create', predicate: 'CALLS' },
+        { srcName: 'run', dstName: 'Logger.write', predicate: 'CALLS' },
+      ]),
+    );
+  });
+
+  it('leaves union-typed receivers as bare names', () => {
+    // A union has no single receiver type to attribute the call to, so the bare
+    // name is the honest answer rather than an arbitrary pick of one member.
+    const result = parseFile(
+      '/repo/Union.php',
+      `<?php
+final class Union
+{
+    public function run(Service|Repository $either): void
+    {
+        $either->create();
+    }
+}
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.relationships).toContainEqual({
+      srcName: 'Union.run',
+      dstName: 'create',
+      predicate: 'CALLS',
+    });
+  });
 });
