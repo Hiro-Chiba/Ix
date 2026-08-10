@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { ingestMtimeCachePath } from "../config.js";
+import { ingestMtimeCachePath, saveConfig } from "../config.js";
 import { loadIngestBaseline } from "../ingest-baseline.js";
 import { persistIngestBaselineIfClean } from "../commands/ingest.js";
-import { detectStaleFiles } from "../stale.js";
+import { detectStaleFiles, isFileStale } from "../stale.js";
 
 let home: string;
 let savedHome: string | undefined;
@@ -114,6 +114,69 @@ describe("workspace-scoped staleness", () => {
       currentRev: 0,
       staleFiles: 0,
       sampleChangedFiles: [],
+    });
+  });
+
+  it("reports a mapped file that was deleted after ingest", async () => {
+    const root = path.join(home, "deleted-file");
+    const filePath = writeSource(root, "deleted.js", "export const value = 1;\n");
+    const ingestedAt = new Date("2026-08-09T18:00:00.000Z");
+    persistIngestBaselineIfClean(
+      root,
+      new Map([[filePath, fs.statSync(filePath).mtimeMs]]),
+      14,
+      0,
+      0,
+      ingestedAt,
+    );
+    saveConfig({
+      endpoint: "http://localhost:8090",
+      format: "text",
+      workspaces: [
+        {
+          workspace_id: "dead0001",
+          workspace_name: "deleted-file",
+          root_path: root,
+          default: true,
+        },
+      ],
+    });
+
+    fs.unlinkSync(filePath);
+
+    expect(detectStaleFiles(root)).toEqual({
+      lastIngestAt: ingestedAt.toISOString(),
+      currentRev: 14,
+      staleFiles: 1,
+      sampleChangedFiles: ["deleted.js"],
+    });
+    expect(isFileStale(filePath)).toBe(true);
+    expect(isFileStale(path.join(root, "never-mapped.js"))).toBe(false);
+  });
+
+  it("persists an empty baseline after the last mapped file is deleted", () => {
+    const root = path.join(home, "empty-after-delete");
+    const filePath = writeSource(root, "deleted.js", "export const value = 1;\n");
+    persistIngestBaselineIfClean(
+      root,
+      new Map([[filePath, fs.statSync(filePath).mtimeMs]]),
+      14,
+      0,
+      0,
+      new Date("2026-08-09T18:00:00.000Z"),
+    );
+
+    const completedAt = new Date("2026-08-09T18:01:00.000Z");
+    const deletedFiles = new Map([[filePath, ["caller.js"]]]);
+    expect(
+      persistIngestBaselineIfClean(root, new Map(), 15, 0, 0, completedAt, deletedFiles),
+    ).toBe(true);
+
+    expect(loadIngestBaseline(root)).toEqual({
+      files: new Map(),
+      deletedFiles,
+      currentRev: 15,
+      lastIngestAt: completedAt.toISOString(),
     });
   });
 

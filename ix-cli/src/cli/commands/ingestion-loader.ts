@@ -11,6 +11,8 @@ type IngestionModule = {
 type PatchBuilderModule = {
   buildPatch: (parsed: any, hash: string, workspaceId: string, previousSourceHash?: string) => any;
   buildPatchWithResolution: (parsed: any, hash: string, workspaceId: string, resolvedEdges: any[], previousSourceHash?: string) => any;
+  buildDeletionPatch: (filePath: string, previousSourceHash: string, deletionToken: string, workspaceId: string, ops: any[], multiRepo?: any) => any;
+  sourcePatchIdCandidates: (filePath: string, sourceHash: string, workspaceId: string) => string[];
   fileNodeId: (workspaceId: string, filePath: string) => string;
   symbolNodeId: (workspaceId: string, filePath: string, qualifiedKey: string) => string;
 };

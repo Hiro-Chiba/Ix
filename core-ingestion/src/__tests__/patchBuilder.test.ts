@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractorName, PREVIOUS_EXTRACTORS } from '../patch-builder.js';
+import {
+  buildDeletionPatch,
+  extractorName,
+  PREVIOUS_EXTRACTORS,
+  sourcePatchIdCandidates,
+} from '../patch-builder.js';
 
 describe('patch-builder extractor policy', () => {
   it('tracks the immediate predecessor when the extractor version is bumped', () => {
@@ -16,5 +21,30 @@ describe('patch-builder extractor policy', () => {
     expect(PREVIOUS_EXTRACTORS).toContain(previous);
     expect(PREVIOUS_EXTRACTORS).not.toContain(current);
     expect(PREVIOUS_EXTRACTORS.every(version => /^tree-sitter\/\d+\.\d+$/.test(version))).toBe(true);
+  });
+
+  it('builds a deterministic tombstone for every supported prior patch id', () => {
+    const filePath = 'src/removed.ts';
+    const sourceHash = 'previous-source-hash';
+    const workspaceId = 'deadbeef';
+    const candidates = sourcePatchIdCandidates(filePath, sourceHash, workspaceId);
+    const ops = [{ type: 'DeleteNode', id: '00000000-0000-0000-0000-000000000001' }];
+
+    const patch = buildDeletionPatch(filePath, sourceHash, 'baseline-1', workspaceId, ops);
+    const retry = buildDeletionPatch(filePath, sourceHash, 'baseline-1', workspaceId, ops);
+    const nextDeletion = buildDeletionPatch(filePath, sourceHash, 'baseline-2', workspaceId, ops);
+
+    expect(new Set(candidates).size).toBe(PREVIOUS_EXTRACTORS.length + 2);
+    expect(patch.patchId).toBe(retry.patchId);
+    expect(patch.patchId).not.toBe(nextDeletion.patchId);
+    expect(patch.source).toMatchObject({
+      uri: filePath,
+      extractor: extractorName(),
+      sourceType: 'code',
+      workspaceId,
+    });
+    expect(patch.source.sourceHash).not.toBe(sourceHash);
+    expect(patch.ops).toEqual(ops);
+    expect(patch.replaces).toEqual(candidates);
   });
 });

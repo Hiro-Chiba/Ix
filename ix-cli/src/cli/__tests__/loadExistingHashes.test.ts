@@ -52,4 +52,11 @@ describe("loadExistingHashes — workspace-scoped baseline (Ix#225 gap 3)", () =
     const out = await loadExistingHashes(failing, ["/a.ts"], a => a, () => "ws");
     expect(out.size).toBe(0);
   });
+
+  it("propagates lookup failures when deletion cleanup requires a reliable baseline", async () => {
+    const failing = { getSourceHashes: async () => { throw new Error("network"); } };
+    await expect(
+      loadExistingHashes(failing, ["/deleted.ts"], a => a, () => "ws", false, true),
+    ).rejects.toThrow("network");
+  });
 });

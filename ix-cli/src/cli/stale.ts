@@ -93,6 +93,7 @@ export function detectStaleFiles(
   }
 
   const files = collectFiles(workspaceRoot);
+  const currentFiles = new Set(files.map((filePath) => path.resolve(filePath)));
   const changedFiles: string[] = [];
 
   for (const filePath of files) {
@@ -107,6 +108,15 @@ export function detectStaleFiles(
       }
     } catch {
       // skip inaccessible files
+    }
+  }
+
+  for (const ingestedPath of baseline.files.keys()) {
+    const absolutePath = path.isAbsolute(ingestedPath)
+      ? path.resolve(ingestedPath)
+      : path.resolve(workspaceRoot, ingestedPath);
+    if (!currentFiles.has(absolutePath) && !fs.existsSync(absolutePath)) {
+      changedFiles.push(path.relative(workspaceRoot, absolutePath));
     }
   }
 
@@ -126,14 +136,18 @@ export function detectStaleFiles(
  * this used to need was once a backend round-trip per file.
  */
 export function isFileStale(filePath: string): boolean {
-  if (!fs.existsSync(filePath)) return false;
-
   const workspaceRoot = path.resolve(resolveWorkspaceRoot());
   const baseline = loadIngestBaseline(workspaceRoot);
   if (!baseline) return false;
 
+  const absolutePath = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(workspaceRoot, filePath);
+  if (!fs.existsSync(absolutePath)) {
+    return baseline.files.has(absolutePath) || baseline.files.has(filePath);
+  }
+
   try {
-    const absolutePath = path.resolve(filePath);
     return differsFromIngestBaseline(
       absolutePath,
       fs.statSync(absolutePath).mtimeMs,

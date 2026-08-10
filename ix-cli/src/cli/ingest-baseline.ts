@@ -5,12 +5,14 @@ import { ingestMtimeCachePath } from "./config.js";
 interface SerializedIngestBaseline {
   root: string;
   files: Record<string, number>;
+  deletedFiles?: Record<string, string[]>;
   currentRev?: number;
   lastIngestAt?: string;
 }
 
 export interface IngestBaseline {
   files: Map<string, number>;
+  deletedFiles: Map<string, string[]>;
   currentRev: number;
   lastIngestAt: string;
 }
@@ -25,6 +27,14 @@ export function loadIngestBaseline(projectRoot: string): IngestBaseline | null {
     for (const [filePath, mtime] of Object.entries(data.files)) {
       if (Number.isFinite(mtime)) files.set(filePath, mtime);
     }
+    const deletedFiles = new Map<string, string[]>();
+    for (const [filePath, dependents] of Object.entries(data.deletedFiles ?? {})) {
+      if (!Array.isArray(dependents)) continue;
+      deletedFiles.set(
+        filePath,
+        dependents.filter((dependent): dependent is string => typeof dependent === "string"),
+      );
+    }
 
     const parsedTimestamp = data.lastIngestAt ? Date.parse(data.lastIngestAt) : Number.NaN;
     const lastIngestAt = Number.isFinite(parsedTimestamp)
@@ -37,7 +47,7 @@ export function loadIngestBaseline(projectRoot: string): IngestBaseline | null {
         ? data.currentRev
         : 0;
 
-    return { files, currentRev, lastIngestAt };
+    return { files, deletedFiles, currentRev, lastIngestAt };
   } catch {
     return null;
   }
@@ -48,12 +58,14 @@ export function saveIngestBaseline(
   mtimes: Map<string, number>,
   currentRev: number,
   now: Date = new Date(),
+  deletedFiles: Map<string, string[]> = new Map(),
 ): void {
   try {
     const previousRev = loadIngestBaseline(projectRoot)?.currentRev ?? 0;
     const data: SerializedIngestBaseline = {
       root: projectRoot,
       files: Object.fromEntries(mtimes),
+      deletedFiles: Object.fromEntries(deletedFiles),
       currentRev: currentRev > 0 ? currentRev : previousRev,
       lastIngestAt: now.toISOString(),
     };

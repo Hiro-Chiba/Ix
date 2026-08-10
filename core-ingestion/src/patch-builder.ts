@@ -95,6 +95,20 @@ export function extractorName(): string {
 /** Previous extractor versions — their patches are superseded when re-ingesting. */
 export const PREVIOUS_EXTRACTORS = ['tree-sitter/1.23', 'tree-sitter/1.22', 'tree-sitter/1.21', 'tree-sitter/1.20', 'tree-sitter/1.19', 'tree-sitter/1.18', 'tree-sitter/1.17', 'tree-sitter/1.16', 'tree-sitter/1.15', 'tree-sitter/1.14', 'tree-sitter/1.13', 'tree-sitter/1.12', 'tree-sitter/1.11', 'tree-sitter/1.10', 'tree-sitter/1.9', 'tree-sitter/1.8', 'tree-sitter/1.7', 'tree-sitter/1.6', 'tree-sitter/1.5', 'tree-sitter/1.4', 'tree-sitter/1.3', 'tree-sitter/1.2', 'tree-sitter/1.1'];
 
+/** Patch ids that may own the active graph entities for a stored source hash. */
+export function sourcePatchIdCandidates(
+  filePath: string,
+  sourceHash: string,
+  workspaceId: string,
+): string[] {
+  const { computePatchId, legacyPatchId } = makeIds(workspaceId);
+  return [
+    computePatchId(filePath, sourceHash, extractorName()),
+    ...PREVIOUS_EXTRACTORS.map(extractor => computePatchId(filePath, sourceHash, extractor)),
+    legacyPatchId(filePath, sourceHash),
+  ];
+}
+
 // nodeId / edgeId / chunkId / computePatchId / legacyPatchId are produced by
 // makeIds(workspaceId) above so every id is scoped to its workspace.
 
@@ -377,6 +391,42 @@ export interface MultiRepoContext {
   repoId?: string;
   /** filePath (workspace-relative, repo-prefixed) -> that file's repo workspace_id. */
   repoWorkspaceOf?: (filePath: string) => string | undefined;
+}
+
+/** Build a patch that retires every entity previously emitted for a deleted file. */
+export function buildDeletionPatch(
+  filePath: string,
+  previousSourceHash: string,
+  deletionToken: string,
+  workspaceId: string,
+  ops: PatchOp[],
+  multiRepo?: MultiRepoContext,
+): GraphPatchPayload {
+  const extractor = extractorName();
+  const deletionHash = crypto
+    .createHash('sha256')
+    .update(`deleted:${previousSourceHash}:${deletionToken}`)
+    .digest('hex');
+  const { computePatchId } = makeIds(workspaceId);
+
+  return {
+    patchId: computePatchId(filePath, deletionHash, extractor),
+    actor: 'ix/ingestion',
+    timestamp: new Date().toISOString(),
+    source: {
+      uri: filePath,
+      sourceHash: deletionHash,
+      extractor,
+      sourceType: sourceType(filePath),
+      workspaceId,
+      ...(multiRepo?.systemId ? { systemId: multiRepo.systemId } : {}),
+      ...(multiRepo?.repoId ? { repoId: multiRepo.repoId } : {}),
+    },
+    baseRev: 0,
+    ops,
+    replaces: sourcePatchIdCandidates(filePath, previousSourceHash, workspaceId),
+    intent: `Deleted ${nodePath.basename(filePath)}`,
+  };
 }
 
 export function buildPatchWithResolution(
