@@ -193,6 +193,66 @@ describe("resolveEntityFull: method preferred over chunk for PascalCase names", 
   });
 });
 
+describe("resolveEntityFull: same-kind ambiguity", () => {
+  const duplicateClasses = [
+    {
+      id: "alpha-service-id",
+      name: "DuplicateService",
+      kind: "class",
+      provenance: { sourceUri: "src/alpha/DuplicateService.ts" },
+    },
+    {
+      id: "beta-service-id",
+      name: "DuplicateService",
+      kind: "class",
+      provenance: { sourceUri: "src/beta/DuplicateService.ts" },
+    },
+  ];
+
+  it("stays ambiguous when --kind matches multiple exact-name candidates", async () => {
+    const mockClient = {
+      search: vi.fn().mockResolvedValue(duplicateClasses),
+    } as any;
+
+    const result = await resolveEntityFull(
+      mockClient,
+      "DuplicateService",
+      ["class"],
+      { kind: "class" },
+    );
+
+    expect(result.resolved).toBe(false);
+    if (!result.resolved) {
+      expect(result.ambiguous).toBe(true);
+      if (result.ambiguous) {
+        expect(result.result.candidates.map(candidate => candidate.id)).toEqual([
+          "alpha-service-id",
+          "beta-service-id",
+        ]);
+      }
+    }
+  });
+
+  it("honors --pick after --kind leaves multiple candidates", async () => {
+    const mockClient = {
+      search: vi.fn().mockResolvedValue(duplicateClasses),
+    } as any;
+
+    const result = await resolveEntityFull(
+      mockClient,
+      "DuplicateService",
+      ["class"],
+      { kind: "class", pick: 2 },
+    );
+
+    expect(result.resolved).toBe(true);
+    if (result.resolved) {
+      expect(result.entity.id).toBe("beta-service-id");
+      expect(result.entity.path).toBe("src/beta/DuplicateService.ts");
+    }
+  });
+});
+
 describe("resolveEntityFull --path hard exclusion", () => {
   it("excludes out-of-scope candidates even on exact name match", async () => {
     // Simulates Bug 1: etcd has 'Notifier' but prometheus does not.

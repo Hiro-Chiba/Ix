@@ -330,11 +330,6 @@ function pickBest(
     return { resolved: true, entity: nodeToResolved(best.node, symbol, resolutionMode(best, opts)) };
   }
 
-  // If user specified --kind, take the best — they asked for it
-  if (opts?.kind) {
-    return { resolved: true, entity: nodeToResolved(best.node, symbol, "exact") };
-  }
-
   // Check if all top candidates at the same score tier are the same entity
   const topScore = best.score;
   const topTier = unique.filter(s => s.score === topScore);
