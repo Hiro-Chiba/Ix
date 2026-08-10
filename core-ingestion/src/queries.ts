@@ -1025,10 +1025,12 @@ export const PHP_QUERIES = `
 
 ; Method call: $obj->method()
 (member_call_expression
+  object: (_) @_qualifier
   name: (name) @call.name) @call
 
 ; Nullsafe method call: $obj?->method()
 (nullsafe_member_call_expression
+  object: (_) @_qualifier
   name: (name) @call.name) @call
 
 ; Static call: Foo::bar() (php_only uses scoped_call_expression)
@@ -1037,6 +1039,27 @@ export const PHP_QUERIES = `
 
 ; Constructor call: new User()
 (object_creation_expression (name) @call.name) @call
+
+; Typed properties: private Service $service
+(property_declaration
+  type: (named_type (name) @_typed_var_type)
+  (property_element
+    name: (variable_name (name) @_typed_var_name))) @_typed_var_scope
+
+; Constructor-promoted properties: private Service $service
+(property_promotion_parameter
+  type: (named_type (name) @_typed_var_type)
+  name: (variable_name (name) @_typed_var_name)) @_typed_var_scope
+
+; Typed method parameters: function run(Service $service)
+(method_declaration
+  parameters: (formal_parameters
+    [(simple_parameter
+      type: (named_type (name) @_typed_param_type)
+      name: (variable_name (name) @_typed_param_name))
+     (property_promotion_parameter
+      type: (named_type (name) @_typed_param_type)
+      name: (variable_name (name) @_typed_param_name))])) @_typed_param_scope
 
 ; ── Heritage: extends ────────────────────────────────────────────────────────
 (class_declaration

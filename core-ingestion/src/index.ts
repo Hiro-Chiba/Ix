@@ -446,6 +446,11 @@ function normalizeCapturedImport(rawValue: string, language: SupportedLanguages)
     return unwrapped.replace(/^\.+/, '');
   }
 
+  if (language === SupportedLanguages.PHP) {
+    const slashed = unwrapped.replace(/\\/g, '/');
+    return slashed.split('/').filter(Boolean).pop() ?? slashed;
+  }
+
   if (language === SupportedLanguages.SAS) {
     // Real SAS uses single backslashes in Windows paths (libname "&P.\SASData").
     // The general pre-normalization only collapses double backslashes, so do it
@@ -1936,11 +1941,11 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     const seenCalls = new Map<string, Set<string>>();
     // Track seen type references per enclosing class/file to avoid duplicate REFERENCES edges
     const seenRefs = new Map<string, Set<string>>();
-    // Python: map function name → (param name → declared type) for typed-parameter qualifier substitution
+    // Map function name → (param name → declared type) for typed-parameter qualifier substitution
     const paramTypeMap = new Map<string, Map<string, string>>();
     // Python: map function name → (variable name → assigned type) for untyped-param qualifier substitution
     const assignTypeMap = new Map<string, Map<string, string>>();
-    // C/C++: map enclosing scope → (variable/member name → declared type)
+    // Map enclosing scope → (variable/member name → declared type)
     const declaredTypeMap = new Map<string, Map<string, string>>();
     // Import aliases keyed by the in-file alias name (Go explicit aliases, etc.).
     const importAliases: Record<string, string> = {};
@@ -2123,6 +2128,25 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         }
       }
 
+      // PHP typed parameters: map the receiver variable to its declared class or
+      // interface so member calls can target Class.method instead of a bare method.
+      if (language === SupportedLanguages.PHP) {
+        const typedParamScope = match.captures.find((c: any) => c.name === '_typed_param_scope');
+        const typedParamName = match.captures.find((c: any) => c.name === '_typed_param_name');
+        const typedParamType = match.captures.find((c: any) => c.name === '_typed_param_type');
+        if (typedParamScope && typedParamName && typedParamType) {
+          const line = typedParamScope.node.startPosition.row + 1;
+          const methodName = typedParamScope.node.childForFieldName?.('name')?.text as string | undefined;
+          const className = findEnclosing(classRanges, line, '');
+          const scope = methodName ? (className ? `${className}.${methodName}` : methodName) : null;
+          if (scope) {
+            if (!paramTypeMap.has(scope)) paramTypeMap.set(scope, new Map());
+            paramTypeMap.get(scope)!.set(typedParamName.node.text, typedParamType.node.text);
+          }
+          continue;
+        }
+      }
+
       // Go typed parameters: build paramTypeMap so method calls on
       // parameters (incl. receivers) resolve to the parameter's declared
       // type. e.g. `func (s *Scheme) F(opts *Options) { opts.Run() }`
@@ -2163,18 +2187,23 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         }
       }
 
-      // C/C++ typed declarations: capture local vars, parameters, and fields so that
+      // Typed declarations: capture local vars, parameters, and fields so that
       // member calls like current->Get(...) can be rewritten to Version.Get.
-      if (language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus) {
+      if (
+        language === SupportedLanguages.C ||
+        language === SupportedLanguages.CPlusPlus ||
+        language === SupportedLanguages.PHP
+      ) {
         const typedVarScope = match.captures.find((c: any) => c.name === '_typed_var_scope');
         const typedVarName = match.captures.find((c: any) => c.name === '_typed_var_name');
         const typedVarType = match.captures.find((c: any) => c.name === '_typed_var_type');
         if (typedVarScope && typedVarName && typedVarType) {
           const line = typedVarScope.node.startPosition.row + 1;
-          const scope =
-            findEnclosingFunction(entities, line)
-            ?? findEnclosing(classRanges, line, '')
-            ?? fileName;
+          const scope = language === SupportedLanguages.PHP
+            ? findEnclosing(classRanges, line, '') ?? fileName
+            : findEnclosingFunction(entities, line)
+              ?? findEnclosing(classRanges, line, '')
+              ?? fileName;
           if (!declaredTypeMap.has(scope)) declaredTypeMap.set(scope, new Map());
           declaredTypeMap.get(scope)!.set(typedVarName.node.text, typedVarType.node.text);
           continue;
@@ -2369,6 +2398,24 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
             return callee;
           }
           let qualifier = qualifierCapture.node.text;
+          let phpPropertyOnThis = false;
+          let phpReceiverIsSupported = true;
+          if (language === SupportedLanguages.PHP) {
+            const receiverNode = qualifierCapture.node;
+            if (receiverNode.type === 'variable_name') {
+              qualifier = receiverNode.firstNamedChild?.text ?? receiverNode.text.replace(/^\$/, '');
+            } else if (receiverNode.type === 'member_access_expression') {
+              qualifier = receiverNode.childForFieldName?.('name')?.text ?? receiverNode.text;
+              const objectNode = receiverNode.childForFieldName?.('object');
+              const objectName = objectNode?.type === 'variable_name'
+                ? objectNode.firstNamedChild?.text ?? objectNode.text.replace(/^\$/, '')
+                : null;
+              phpPropertyOnThis = objectName === 'this';
+            } else {
+              phpReceiverIsSupported = false;
+            }
+          }
+          if (!phpReceiverIsSupported) return callee;
           // Python: 'self'/'cls' always refers to the enclosing class — substitute it
           // so the edge reads 'Query.filter' instead of 'self.filter', enabling
           // same-file resolution without type inference.
@@ -2376,7 +2423,7 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
             const enclosingClass = findEnclosing(classRanges, callLine, '');
             if (enclosingClass) qualifier = enclosingClass;
           } else if (qualifier === 'this') {
-            // JS/TS: 'this' inside a class method refers to the enclosing class.
+            // JS/TS and PHP: 'this' inside a class method refers to the enclosing class.
             // Substitute so e.g. `this.save()` → `Document.save` instead of `this.save`.
             const enclosingClass = findEnclosing(classRanges, callLine, '');
             if (enclosingClass) qualifier = enclosingClass;
@@ -2402,6 +2449,14 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
               const typeForParam = paramTypeMap.get(funcName)?.get(qualifier);
               if (typeForParam) qualifier = typeForParam;
             }
+          } else if (language === SupportedLanguages.PHP) {
+            const funcName = findEnclosingFunction(entities, callLine);
+            const className = findEnclosing(classRanges, callLine, '');
+            const typeForReceiver = phpPropertyOnThis
+              ? (className ? declaredTypeMap.get(className)?.get(qualifier) : undefined)
+              : (funcName ? paramTypeMap.get(funcName)?.get(qualifier) : undefined);
+            if (typeForReceiver) qualifier = typeForReceiver;
+            else return callee;
           } else if (language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus) {
             const funcName = findEnclosingFunction(entities, callLine) ?? fileName;
             const className = findEnclosing(classRanges, callLine, '')
@@ -2705,6 +2760,25 @@ export function buildGlobalResolutionIndex(
       const qkMap = new Map<string, string[]>();
       for (const e of parsed.entities) {
         if (e.kind !== 'function') continue;
+        const list = qkMap.get(e.name) ?? [];
+        list.push(qualifiedKey(e));
+        qkMap.set(e.name, list);
+      }
+      if (qkMap.size > 0) {
+        fileQKeys.set(fp, qkMap);
+        fileHasSymbol.set(fp, new Set(qkMap.keys()));
+      }
+    }
+
+    // PHP: index definitions so an incremental batch can resolve typed receiver
+    // calls to classes and interfaces in unchanged files.
+    for (const [fp, src] of sources) {
+      if (nodePath.extname(fp).toLowerCase() !== '.php') continue;
+      const parsed = parseFile(fp, src);
+      if (!parsed) continue;
+      const qkMap = new Map<string, string[]>();
+      for (const e of parsed.entities) {
+        if (e.kind === 'file' || e.kind === 'module') continue;
         const list = qkMap.get(e.name) ?? [];
         list.push(qualifiedKey(e));
         qkMap.set(e.name, list);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { dedupeDiscoveredFilePaths, isSupportedSourceFile } from '../commands/ingest.js';
+import { dedupeDiscoveredFilePaths, isSupportedSourceFile, needsIndexPrescan } from '../commands/ingest.js';
 
 describe('dedupeDiscoveredFilePaths', () => {
   it('collapses alternate discovered paths that point at the same canonical file', () => {
@@ -53,5 +53,10 @@ describe('dedupeDiscoveredFilePaths', () => {
     ]) {
       expect(isSupportedSourceFile(f)).toBe(true);
     }
+  });
+
+  it('pre-scans PHP definitions for incremental call resolution', () => {
+    expect(needsIndexPrescan('src/Service.php')).toBe(true);
+    expect(needsIndexPrescan('src/service.py')).toBe(false);
   });
 });

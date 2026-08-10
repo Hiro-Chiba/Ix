@@ -219,6 +219,43 @@ describe('resolveEdges', () => {
     });
   });
 
+  it('resolves a typed PHP receiver call when the target is outside the parse batch', () => {
+    const caller = fileResult(
+      '/repo/UseCase.php',
+      SupportedLanguages.PHP,
+      [entity('create', SupportedLanguages.PHP, 'method', 'UseCase')],
+      [
+        {
+          srcName: 'UseCase.php',
+          dstName: 'DomainService',
+          predicate: 'IMPORTS',
+          importRaw: 'App\\Contracts\\DomainService',
+        },
+        { srcName: 'UseCase.create', dstName: 'DomainService.create', predicate: 'CALLS' },
+      ],
+    );
+    const targetPath = '/repo/DomainService.php';
+    const globalIndex = buildGlobalResolutionIndex(
+      ['/repo/UseCase.php', targetPath],
+      new Map([
+        [
+          targetPath,
+          '<?php interface DomainService { public function create(): void; }',
+        ],
+      ]),
+    );
+
+    expect(resolveEdges([caller], undefined, globalIndex)).toContainEqual({
+      srcFilePath: '/repo/UseCase.php',
+      srcName: 'UseCase.create',
+      dstFilePath: targetPath,
+      dstName: 'DomainService.create',
+      dstQualifiedKey: 'DomainService.create',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
   it('resolves Elixir alias-qualified calls through the implicit short alias', () => {
   const caller = fileResult(
     '/repo/lib/my_app/accounts.ex',

@@ -43,11 +43,11 @@ export function isSupportedSourceFile(filePath: string): boolean {
 
 // Extensions whose source text must be pre-read so buildGlobalResolutionIndex can
 // extract cross-batch symbols before the streaming parse loop. Go uses a fast
-// regex scan; SAS and R are parsed (their cross-batch indexes are derived from
-// the parser's definition entities).
-const INDEX_PRESCAN_EXTENSIONS = new Set(['.go', '.r', '.sas']);
+// regex scan; PHP, SAS, and R are parsed (their cross-batch indexes are derived
+// from the parser's definition entities).
+const INDEX_PRESCAN_EXTENSIONS = new Set(['.go', '.php', '.r', '.sas']);
 
-function needsIndexPrescan(filePath: string): boolean {
+export function needsIndexPrescan(filePath: string): boolean {
   return INDEX_PRESCAN_EXTENSIONS.has(nodePath.extname(filePath).toLowerCase());
 }
 
