@@ -2641,6 +2641,14 @@ export interface GlobalResolutionIndex {
 export function buildGlobalResolutionIndex(
   filePaths: string[],
   sources?: Map<string, string>,
+  // Parse results the caller already has. The parser-derived language blocks
+  // below (PHP, JS/TS, R, SAS) call parseFile synchronously on the main thread,
+  // which is fine for a handful of files and not fine for a whole repository's
+  // worth of TypeScript. The CLI owns a worker pool; letting it parse in
+  // parallel and hand the results in keeps the work off this thread entirely.
+  // Absent an entry, each block falls back to parsing here, so callers that do
+  // not have a pool (tests, library use) behave exactly as before.
+  preParsed?: Map<string, FileParseResult>,
 ): GlobalResolutionIndex {
   const stemToFiles = new Map<string, string[]>();
   const dirToIndexFiles = new Map<string, string[]>();
@@ -2747,6 +2755,28 @@ export function buildGlobalResolutionIndex(
       }
     }
 
+    // JavaScript/TypeScript: index definitions for cross-batch resolution from
+    // the same parser output used by the normal ingest path. A path-only index
+    // can find an imported file outside the current streaming batch, but without
+    // its symbols resolveEdges cannot verify the destination and drops the edge.
+    const jsTsExtensions = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx']);
+    for (const [fp, src] of sources) {
+      if (!jsTsExtensions.has(nodePath.extname(fp).toLowerCase())) continue;
+      const parsed = preParsed?.get(fp) ?? parseFile(fp, src);
+      if (!parsed) continue;
+      const qkMap = new Map<string, string[]>();
+      for (const e of parsed.entities) {
+        if (e.kind === 'file' || e.kind === 'module') continue;
+        const list = qkMap.get(e.name) ?? [];
+        list.push(qualifiedKey(e));
+        qkMap.set(e.name, list);
+      }
+      if (qkMap.size > 0) {
+        fileQKeys.set(fp, qkMap);
+        fileHasSymbol.set(fp, new Set(qkMap.keys()));
+      }
+    }
+
     // R: index function definitions for cross-batch Tier-3 resolution. Derive
     // them from the parser's definition.function entities (not a regex) so this
     // never drifts from what the in-batch path extracts in resolveEdges — the
@@ -2755,7 +2785,7 @@ export function buildGlobalResolutionIndex(
     // resolveEdges (key by name, value qkey). Same pattern as the SAS index.
     for (const [fp, src] of sources) {
       if (nodePath.extname(fp).toLowerCase() !== '.r') continue;
-      const parsed = parseFile(fp, src);
+      const parsed = preParsed?.get(fp) ?? parseFile(fp, src);
       if (!parsed) continue;
       const qkMap = new Map<string, string[]>();
       for (const e of parsed.entities) {
@@ -2774,7 +2804,7 @@ export function buildGlobalResolutionIndex(
     // calls to classes and interfaces in unchanged files.
     for (const [fp, src] of sources) {
       if (nodePath.extname(fp).toLowerCase() !== '.php') continue;
-      const parsed = parseFile(fp, src);
+      const parsed = preParsed?.get(fp) ?? parseFile(fp, src);
       if (!parsed) continue;
       const qkMap = new Map<string, string[]>();
       for (const e of parsed.entities) {
@@ -2796,7 +2826,7 @@ export function buildGlobalResolutionIndex(
     // Mirrors the qkMap construction at resolveEdges (key by name, value qkey).
     for (const [fp, src] of sources) {
       if (nodePath.extname(fp).toLowerCase() !== '.sas') continue;
-      const parsed = parseFile(fp, src);
+      const parsed = preParsed?.get(fp) ?? parseFile(fp, src);
       if (!parsed) continue;
       const qkMap = new Map<string, string[]>();
       for (const e of parsed.entities) {

@@ -55,8 +55,14 @@ describe('dedupeDiscoveredFilePaths', () => {
     }
   });
 
-  it('pre-scans PHP definitions for incremental call resolution', () => {
-    expect(needsIndexPrescan('src/Service.php')).toBe(true);
+  it('pre-scans every language whose index is parser-derived', () => {
+    for (const filePath of [
+      'src/Service.php',
+      'src/helper.js', 'src/helper.jsx', 'src/helper.mjs', 'src/helper.cjs',
+      'src/helper.ts', 'src/helper.tsx',
+    ]) {
+      expect(needsIndexPrescan(filePath)).toBe(true);
+    }
     expect(needsIndexPrescan('src/service.py')).toBe(false);
   });
 });

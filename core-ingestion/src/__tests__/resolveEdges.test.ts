@@ -256,6 +256,78 @@ describe('resolveEdges', () => {
     });
   });
 
+  it('resolves a TypeScript call when the imported definition is outside the parse batch', () => {
+    const caller = fileResult(
+      '/repo/consumer.ts',
+      SupportedLanguages.TypeScript,
+      [entity('runCrossBatchTarget', SupportedLanguages.TypeScript)],
+      [
+        { srcName: 'consumer.ts', dstName: 'target', predicate: 'IMPORTS', importRaw: './target' },
+        { srcName: 'runCrossBatchTarget', dstName: 'crossBatchTarget', predicate: 'CALLS' },
+      ],
+    );
+    caller.importBindings = [
+      { pkg: './target', local: 'crossBatchTarget', imported: 'crossBatchTarget' },
+    ];
+
+    const targetPath = '/repo/target.ts';
+    const globalIndex = buildGlobalResolutionIndex(
+      ['/repo/consumer.ts', targetPath],
+      new Map([[targetPath, 'export function crossBatchTarget() {}\n']]),
+    );
+
+    expect(resolveEdges([caller], undefined, globalIndex)).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'runCrossBatchTarget',
+      dstFilePath: targetPath,
+      dstName: 'crossBatchTarget',
+      dstQualifiedKey: 'crossBatchTarget',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('uses caller-supplied parse results instead of re-parsing', () => {
+    // The CLI parses prescan sources on its worker pool and hands the results
+    // in, so the index costs no main-thread parsing. Proven by supplying a
+    // parse result whose entity does not appear in the source text: if the
+    // index re-parsed, `fromPool` could not be resolved.
+    const targetPath = '/repo/target.ts';
+    const caller = fileResult(
+      '/repo/consumer.ts',
+      SupportedLanguages.TypeScript,
+      [entity('run', SupportedLanguages.TypeScript)],
+      [
+        { srcName: 'consumer.ts', dstName: 'target', predicate: 'IMPORTS', importRaw: './target' },
+        { srcName: 'run', dstName: 'fromPool', predicate: 'CALLS' },
+      ],
+    );
+    caller.importBindings = [{ pkg: './target', local: 'fromPool', imported: 'fromPool' }];
+
+    const poolResult = fileResult(
+      targetPath,
+      SupportedLanguages.TypeScript,
+      [entity('fromPool', SupportedLanguages.TypeScript)],
+      [],
+    );
+
+    const globalIndex = buildGlobalResolutionIndex(
+      ['/repo/consumer.ts', targetPath],
+      new Map([[targetPath, '// the pool result is authoritative, not this text\n']]),
+      new Map([[targetPath, poolResult]]),
+    );
+
+    expect(resolveEdges([caller], undefined, globalIndex)).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'run',
+      dstFilePath: targetPath,
+      dstName: 'fromPool',
+      dstQualifiedKey: 'fromPool',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
   it('resolves Elixir alias-qualified calls through the implicit short alias', () => {
   const caller = fileResult(
     '/repo/lib/my_app/accounts.ex',

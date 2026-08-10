@@ -43,9 +43,13 @@ export function isSupportedSourceFile(filePath: string): boolean {
 
 // Extensions whose source text must be pre-read so buildGlobalResolutionIndex can
 // extract cross-batch symbols before the streaming parse loop. Go uses a fast
-// regex scan; PHP, SAS, and R are parsed (their cross-batch indexes are derived
-// from the parser's definition entities).
-const INDEX_PRESCAN_EXTENSIONS = new Set(['.go', '.php', '.r', '.sas']);
+// regex scan; PHP, JavaScript, TypeScript, SAS and R are parsed, so their
+// cross-batch indexes are derived from the parser's definition entities and
+// cannot drift from what the in-batch path extracts.
+const INDEX_PRESCAN_EXTENSIONS = new Set([
+  '.go', '.php', '.r', '.sas',
+  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx',
+]);
 
 export function needsIndexPrescan(filePath: string): boolean {
   return INDEX_PRESCAN_EXTENSIONS.has(nodePath.extname(filePath).toLowerCase());
@@ -687,6 +691,42 @@ export async function ingestFiles(
   };
 
 
+
+  /**
+   * Parse the prescan sources on the worker pool.
+   *
+   * buildGlobalResolutionIndex derives PHP/JS/TS/R/SAS indexes from real parse
+   * results rather than a regex, so they cannot drift from what the in-batch
+   * path extracts — the right call, but it means the index costs one parse per
+   * prescanned file. Done inside the index that is a synchronous main-thread
+   * loop, and .ts is not a rare extension: on a TypeScript repo it is most of
+   * the files, and an incremental map pays it for every unchanged file too.
+   *
+   * The pool is already running for the streaming loop below, so parse there
+   * instead and hand the results over. Only extensions whose index is
+   * parser-derived are worth the round trip; Go is a regex scan inside the
+   * index and needs nothing here.
+   */
+  const PARSER_DERIVED_PRESCAN = new Set(['.php', '.r', '.sas', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx']);
+  const preParsePrescanSources = async (relSources: Map<string, string>): Promise<Map<string, any>> => {
+    const targets = [...relSources.keys()].filter(
+      fp => PARSER_DERIVED_PRESCAN.has(nodePath.extname(fp).toLowerCase()),
+    );
+    const preParsed = new Map<string, any>();
+    if (targets.length === 0) return preParsed;
+    const PRESCAN_PARSE_CHUNK = 500;
+    for (let i = 0; i < targets.length; i += PRESCAN_PARSE_CHUNK) {
+      const chunk = targets.slice(i, i + PRESCAN_PARSE_CHUNK);
+      const parsed = await Promise.all(
+        chunk.map(fp => ensureParsePool().parse(fp, relSources.get(fp)!).catch(() => null)),
+      );
+      for (let j = 0; j < chunk.length; j++) {
+        if (parsed[j]) preParsed.set(chunk[j], parsed[j]);
+      }
+    }
+    return preParsed;
+  };
+
   let progressPhase   = 'Scanning';
   let progressCurrent = 0;
   let progressTotal   = 0;
@@ -1219,9 +1259,11 @@ export async function ingestFiles(
           const relSources = new Map<string, string>();
           for (const [abs, text] of sources) relSources.set(toWorkspaceRelative(abs), text);
           const relFilePaths = filePaths.map(toWorkspaceRelative);
-          globalIndex = (ingestion.buildGlobalResolutionIndex as Function)(relFilePaths, relSources);
+          const preParsed = await preParsePrescanSources(relSources);
+          globalIndex = (ingestion.buildGlobalResolutionIndex as Function)(relFilePaths, relSources, preParsed);
           sources.clear();
           relSources.clear();
+          preParsed.clear();
         }
 
         let pendingFlush: Promise<void> = Promise.resolve();
@@ -1273,8 +1315,10 @@ export async function ingestFiles(
           }
         }
         const relFilePaths = filePaths.map(toWorkspaceRelative);
-        globalIndex = ingestion.buildGlobalResolutionIndex(relFilePaths, sources);
+        const preParsed = await preParsePrescanSources(sources);
+        globalIndex = ingestion.buildGlobalResolutionIndex(relFilePaths, sources, preParsed);
         sources.clear();
+        preParsed.clear();
         timings.goIndexMs = Math.round(performance.now() - goIndexStart);
       }
 
