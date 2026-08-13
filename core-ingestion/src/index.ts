@@ -175,7 +175,7 @@ export interface ParsedRelationship {
 }
 
 /**
- * A single named/default import binding in a JS/TS file: the in-file local name
+ * A single named/default import binding: the in-file local name
  * mapped to the PUBLIC symbol it refers to in the source package. `imported` is
  * the public export name ("default" for a default import). Lets a consumer's
  * call to the LOCAL name (e.g. `fmt()` from `import { format as fmt }`) be
@@ -205,7 +205,7 @@ export interface FileParseResult {
   chunks: ParsedChunk[];
   relationships: ParsedRelationship[];
   importAliases?: Record<string, string>;
-  /** JS/TS named/default import bindings (local → public symbol). */
+  /** Named/default import bindings (local → public symbol). */
   importBindings?: ImportBinding[];
   /** JS/TS provider-side aliased/default public export names. */
   exportPublicNames?: ExportPublicName[];
@@ -2291,6 +2291,17 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
       if (importName) {
         const name = importName.node.text;
         if (name && name !== '*' && name.length > 1) {
+          const rawModule = match.captures.find((c: any) => c.name === 'import.module')?.node.text;
+          if (language === SupportedLanguages.Python && rawModule) {
+            const dotsOnly = /^\.+$/.test(rawModule);
+            const pkg = dotsOnly ? `${rawModule}${name}` : rawModule;
+            importBindings.push({ pkg, local: name, imported: name });
+            if (dotsOnly) {
+              entities.push({ name, kind: 'module', lineStart: importName.node.startPosition.row + 1, lineEnd: importName.node.startPosition.row + 1, language });
+              relationships.push({ srcName: fileName, dstName: name, predicate: 'IMPORTS', importRaw: pkg });
+              continue;
+            }
+          }
           entities.push({ name, kind: 'module', lineStart: importName.node.startPosition.row + 1, lineEnd: importName.node.startPosition.row + 1, language });
           relationships.push({ srcName: fileName, dstName: name, predicate: 'IMPORTS' });
         }
@@ -2961,9 +2972,18 @@ export function resolveEdges(
   // imports (imported == "default" is not a by-name symbol in the provider; those are
   // handled in the cross-repo stitch path) and no-op named imports (local == imported).
   const callBindings = new Map<string, Map<string, string>>();
+  const relativeCallBindings = new Map<string, Set<string>>();
   for (const r of results) {
     if (!r.importBindings) continue;
     for (const b of r.importBindings) {
+      if (
+        b.pkg.startsWith('./') || b.pkg.startsWith('../') ||
+        (r.language === SupportedLanguages.Python && b.pkg.startsWith('.'))
+      ) {
+        let bindings = relativeCallBindings.get(r.filePath);
+        if (!bindings) { bindings = new Set(); relativeCallBindings.set(r.filePath, bindings); }
+        bindings.add(b.local);
+      }
       if (b.imported === 'default' || b.local === b.imported) continue;
       let m = callBindings.get(r.filePath);
       if (!m) { m = new Map(); callBindings.set(r.filePath, m); }
@@ -3139,6 +3159,23 @@ export function resolveEdges(
       if (!list.includes(r.filePath)) list.push(r.filePath);
       dirToIndexFiles.set(dirName, list);
     }
+  }
+
+  // Relative imports must be resolved against the importing file's directory.
+  // Keep a normalized path lookup so they do not fall back to a same-named file
+  // elsewhere in the repository.
+  const normalizedPathToFiles = new Map<string, string[]>();
+  const addIndexedPath = (filePath: string): void => {
+    const normalized = nodePath.posix.normalize(filePath.replace(/\\/g, '/'));
+    const files = normalizedPathToFiles.get(normalized) ?? [];
+    if (!files.includes(filePath)) files.push(filePath);
+    normalizedPathToFiles.set(normalized, files);
+  };
+  for (const files of stemToFiles.values()) {
+    for (const filePath of files) addIndexedPath(filePath);
+  }
+  for (const files of dirToIndexFiles.values()) {
+    for (const filePath of files) addIndexedPath(filePath);
   }
 
   // packageToFiles: seed from global index, then add batch entries.
@@ -3338,12 +3375,83 @@ export function resolveEdges(
     return langFamily(src) === langFamily(dst);
   };
 
-  function resolveImportTargets(srcFilePath: string, srcLanguage: SupportedLanguages, modName: unknown): string[] {
+  function relativeImportTarget(srcFilePath: string, srcLanguage: SupportedLanguages, importRaw: unknown): string | null {
+    if (typeof importRaw !== 'string') return null;
+    const sourceDir = nodePath.posix.dirname(srcFilePath.replace(/\\/g, '/'));
+
+    if (
+      (srcLanguage === SupportedLanguages.JavaScript || srcLanguage === SupportedLanguages.TypeScript) &&
+      (importRaw.startsWith('./') || importRaw.startsWith('../'))
+    ) {
+      return nodePath.posix.normalize(nodePath.posix.join(sourceDir, importRaw));
+    }
+
+    if (srcLanguage === SupportedLanguages.Python && importRaw.startsWith('.')) {
+      const dots = importRaw.match(/^\.+/)?.[0].length ?? 0;
+      let packageDir = sourceDir;
+      for (let i = 1; i < dots; i++) packageDir = nodePath.posix.dirname(packageDir);
+      const modulePath = importRaw.slice(dots).replace(/\./g, '/');
+      return nodePath.posix.normalize(nodePath.posix.join(packageDir, modulePath));
+    }
+
+    return null;
+  }
+
+  function resolveRelativeImportTargets(
+    srcFilePath: string,
+    srcLanguage: SupportedLanguages,
+    importRaw: unknown,
+  ): string[] | null {
+    const target = relativeImportTarget(srcFilePath, srcLanguage, importRaw);
+    if (target === null) return null;
+
+    const candidatePaths: string[] = [];
+    if (srcLanguage === SupportedLanguages.Python) {
+      if (target.endsWith('.py')) {
+        candidatePaths.push(target);
+      } else {
+        candidatePaths.push(nodePath.posix.join(target, '__init__.py'), `${target}.py`);
+      }
+    } else {
+      const extension = nodePath.posix.extname(target).toLowerCase();
+      const base = extension.length > 0 ? target.slice(0, -extension.length) : target;
+      const addSourceVariants = (pathBase: string): void => {
+        for (const suffix of ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs']) {
+          candidatePaths.push(`${pathBase}${suffix}`);
+        }
+      };
+
+      if (extension.length === 0) {
+        addSourceVariants(target);
+        addSourceVariants(nodePath.posix.join(target, 'index'));
+      } else if (extension === '.js') {
+        for (const suffix of ['.ts', '.tsx', '.d.ts', '.js']) candidatePaths.push(`${base}${suffix}`);
+      } else if (extension === '.jsx') {
+        for (const suffix of ['.tsx', '.d.ts', '.jsx']) candidatePaths.push(`${base}${suffix}`);
+      } else {
+        candidatePaths.push(target);
+      }
+    }
+
+    for (const candidatePath of candidatePaths) {
+      const matches = normalizedPathToFiles.get(candidatePath) ?? [];
+      if (matches.length > 0) return matches;
+    }
+    return [];
+  }
+
+  function resolveImportTargets(
+    srcFilePath: string,
+    srcLanguage: SupportedLanguages,
+    modName: unknown,
+    importRaw?: unknown,
+  ): string[] {
     // fileLanguage only covers the current parse batch; cross-batch candidates
     // come from the global stem index, so fall back to the extension-derived
     // language (always available) — otherwise an undefined dst language would
     // slip cross-language matches (e.g. a Python import -> a Rust/Elixir file).
-    const importMatches = modNameToFiles(modName, srcFilePath)
+    const importMatches = (resolveRelativeImportTargets(srcFilePath, srcLanguage, importRaw) ??
+      modNameToFiles(modName, srcFilePath))
       .filter(fp => importLanguageCompatible(srcLanguage, fileLanguage.get(fp) ?? languageFromPath(fp)));
     if (srcLanguage !== SupportedLanguages.Go || importMatches.length <= 1) return importMatches;
     return narrowGoImportCandidates(srcFilePath, modName, importMatches, files => {
@@ -3490,12 +3598,15 @@ export function resolveEdges(
     const srcFilePath = result.filePath;
     const srcLanguage = result.language;
     const srcSymbols = fileHasSymbol.get(srcFilePath)!;
+    const pythonHasRelativeModuleImport = srcLanguage === SupportedLanguages.Python &&
+      result.relationships.some(rel => rel.predicate === 'IMPORTS' && rel.importRaw?.startsWith('.'));
 
     // Build the set of file paths this file explicitly imports.
     const importedFilePaths = new Set<string>();
     for (const rel of result.relationships) {
       if (rel.predicate !== 'IMPORTS') continue;
-      for (const fp of resolveImportTargets(srcFilePath, srcLanguage, rel.dstName)) {
+      if (pythonHasRelativeModuleImport && rel.importRaw === undefined) continue;
+      for (const fp of resolveImportTargets(srcFilePath, srcLanguage, rel.dstName, rel.importRaw)) {
         importedFilePaths.add(fp);
       }
     }
@@ -3508,7 +3619,7 @@ export function resolveEdges(
       if (!fpResult) continue;
       for (const rel of fpResult.relationships) {
         if (rel.predicate !== 'IMPORTS') continue;
-        for (const transitiveFp of resolveImportTargets(fp, fpResult.language, rel.dstName)) {
+        for (const transitiveFp of resolveImportTargets(fp, fpResult.language, rel.dstName, rel.importRaw)) {
           if (!importedFilePaths.has(transitiveFp)) transitiveFilePaths.add(transitiveFp);
         }
       }
@@ -3545,7 +3656,9 @@ export function resolveEdges(
           }
         }
 
-        const importMatches = resolveImportTargets(srcFilePath, result.language, rel.dstName);
+        const importMatches = pythonHasRelativeModuleImport && rel.importRaw === undefined
+          ? []
+          : resolveImportTargets(srcFilePath, result.language, rel.dstName, rel.importRaw);
         if (importMatches.length === 1) {
           const fp = importMatches[0];
           resolved.push({
@@ -3572,7 +3685,7 @@ export function resolveEdges(
         // import specifier IS the dependency. Down-weighted by G3 at the map layer;
         // the post-resolution dep gate keeps it (the same import seeds repoDeps).
         // No-op for single-repo (no repoOf/entryFileOf).
-        if (repoOf && packageOf && entryFileOf) {
+        if (repoOf && packageOf && entryFileOf && !(pythonHasRelativeModuleImport && rel.importRaw === undefined)) {
           const srcRepo = repoOf(srcFilePath);
           const mod = typeof rel.importRaw === 'string' ? rel.importRaw : rel.dstName;
           const depRepo = mod ? packageOf(mod) : undefined;
@@ -3709,6 +3822,10 @@ export function resolveEdges(
         const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
         if (dstQualifiedKey === null) continue;
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.8 });
+        continue;
+      }
+      if (rel.predicate === 'CALLS' && relativeCallBindings.get(srcFilePath)?.has(origDstName)) {
+        stats.skippedAmbiguous++;
         continue;
       }
       // Tier 3: global fallback (confidence 0.5) — uses inverted symbol index

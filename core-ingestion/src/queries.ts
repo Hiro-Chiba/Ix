@@ -213,13 +213,13 @@ export const PYTHON_QUERIES = `
 
 ; from . import utils / from .models import User — capture imported symbol names (relative imports)
 (import_from_statement
-  module_name: (relative_import)
+  module_name: (relative_import) @import.module
   name: (dotted_name (identifier) @import.name)) @import.names
 
 ; from module import Class — capture imported symbol names (absolute imports)
 ; e.g. from sqlalchemy.sql.schema import Column → import.name = Column
 (import_from_statement
-  module_name: (dotted_name)
+  module_name: (dotted_name) @import.module
   name: (dotted_name (identifier) @import.name)) @import.names
 
 (call

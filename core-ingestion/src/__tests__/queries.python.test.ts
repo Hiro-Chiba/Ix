@@ -35,6 +35,11 @@ def top_level():
       dstName: 'User',
       predicate: 'IMPORTS',
     });
+    expect(result!.importBindings).toContainEqual({
+      pkg: '.models',
+      local: 'User',
+      imported: 'User',
+    });
     expect(result!.relationships).toContainEqual({
       srcName: 'example.py',
       dstName: 'package.helpers',
@@ -63,6 +68,25 @@ def top_level():
       srcName: 'Service.run',
       dstName: 'value.save',
       predicate: 'CALLS',
+    });
+  });
+
+  it('preserves the module path for from-dot imports', () => {
+    const result = parseFile(
+      '/repo/pkg/caller.py',
+      'from . import utils\n\ndef caller():\n    return utils.target()\n',
+    );
+
+    expect(result!.relationships).toContainEqual({
+      srcName: 'caller.py',
+      dstName: 'utils',
+      predicate: 'IMPORTS',
+      importRaw: '.utils',
+    });
+    expect(result!.importBindings).toContainEqual({
+      pkg: '.utils',
+      local: 'utils',
+      imported: 'utils',
     });
   });
 
