@@ -542,11 +542,13 @@ function extractJsExportPublicNames(rootNode: any): ExportPublicName[] {
       }
       let clause: any = null;
       let decl: any = null;
+      let defaultIdentifier: any = null;
       for (let i = 0; i < node.namedChildCount; i++) {
         const c = node.namedChild(i);
         if (c.type === 'export_clause') clause = c;
         else if (c.type === 'function_declaration' || c.type === 'class_declaration'
           || c.type === 'lexical_declaration' || c.type === 'generator_function_declaration') decl = c;
+        else if (c.type === 'identifier') defaultIdentifier = c;
       }
       // Local re-export `export { a as b }` (NOT `... from './x'`): a is public as b.
       if (clause && !hasSource) {
@@ -564,9 +566,12 @@ function extractJsExportPublicNames(rootNode: any): ExportPublicName[] {
           }
         }
       }
-      // `export default function debug(){}` / `export default class X {}` → public "default".
-      if (isDefault && decl) {
-        const nameNode = (decl.childForFieldName && decl.childForFieldName('name')) || decl.namedChild(0);
+      // Named default declarations and `export default localName` advertise the
+      // local entity under the public name "default".
+      if (isDefault && (decl || defaultIdentifier)) {
+        const nameNode = decl
+          ? (decl.childForFieldName && decl.childForFieldName('name')) || decl.namedChild(0)
+          : defaultIdentifier;
         const nm = nameNode?.text;
         if (nm) {
           const k = `${nm}\x00default`;
@@ -2625,6 +2630,7 @@ function bestQKey(
 export interface GlobalResolutionIndex {
   fileHasSymbol:    Map<string, Set<string>>;
   fileQKeys:        Map<string, Map<string, string[]>>;
+  filePublicNames?: Map<string, Map<string, string>>;
   symbolToFiles:    Map<string, string[]>;
   stemToFiles:      Map<string, string[]>;
   dirToIndexFiles:  Map<string, string[]>;
@@ -2706,6 +2712,7 @@ export function buildGlobalResolutionIndex(
 
   // Entity maps (built from sources if provided, via fast regex scan)
   const fileQKeys = new Map<string, Map<string, string[]>>();
+  const filePublicNames = new Map<string, Map<string, string>>();
   const fileHasSymbol = new Map<string, Set<string>>();
   const symbolToFiles = new Map<string, string[]>();
 
@@ -2774,6 +2781,9 @@ export function buildGlobalResolutionIndex(
       if (qkMap.size > 0) {
         fileQKeys.set(fp, qkMap);
         fileHasSymbol.set(fp, new Set(qkMap.keys()));
+      }
+      if (parsed.exportPublicNames) {
+        filePublicNames.set(fp, new Map(parsed.exportPublicNames.map(name => [name.public, name.local])));
       }
     }
 
@@ -2853,6 +2863,7 @@ export function buildGlobalResolutionIndex(
   return {
     fileHasSymbol,
     fileQKeys,
+    filePublicNames,
     symbolToFiles,
     stemToFiles,
     dirToIndexFiles,
@@ -2957,13 +2968,17 @@ export function resolveEdges(
   // Renamed-import call resolution (Z): a call to a renamed local binding (`import
   // { format as fmt }; fmt()`) should resolve as the provider's public symbol
   // (`format`), so in-repo AND co-ingest resolution link it to the real definition.
-  // Map per file: local binding name -> imported public symbol, EXCLUDING default
-  // imports (imported == "default" is not a by-name symbol in the provider; those are
-  // handled in the cross-repo stitch path) and no-op named imports (local == imported).
+  // Map per file: local binding name -> imported public symbol, excluding default
+  // and no-op named imports from the by-name rewrite. Provider public-name
+  // resolution below handles those bindings against the imported file itself.
   const callBindings = new Map<string, Map<string, string>>();
+  const importBindingsByLocal = new Map<string, Map<string, ImportBinding>>();
   for (const r of results) {
     if (!r.importBindings) continue;
     for (const b of r.importBindings) {
+      let imports = importBindingsByLocal.get(r.filePath);
+      if (!imports) { imports = new Map(); importBindingsByLocal.set(r.filePath, imports); }
+      if (!imports.has(b.local)) imports.set(b.local, b);
       if (b.imported === 'default' || b.local === b.imported) continue;
       let m = callBindings.get(r.filePath);
       if (!m) { m = new Map(); callBindings.set(r.filePath, m); }
@@ -3088,6 +3103,17 @@ export function resolveEdges(
       qkMap.set(e.name, list);
     }
     fileQKeys.set(r.filePath, qkMap);  // overrides global entry if present
+  }
+
+  const filePublicNames = globalIndex
+    ? new Map<string, Map<string, string>>(globalIndex.filePublicNames ?? [])
+    : new Map<string, Map<string, string>>();
+  for (const r of results) {
+    if (r.exportPublicNames) {
+      filePublicNames.set(r.filePath, new Map(r.exportPublicNames.map(name => [name.public, name.local])));
+    } else {
+      filePublicNames.delete(r.filePath);
+    }
   }
 
   // fileHasSymbol: rebuilt from merged fileQKeys so per-batch overrides take effect.
@@ -3484,12 +3510,21 @@ export function resolveEdges(
     return qks.includes(`${qualifierPart}.${memberPart}`);
   }
 
+  function sameScopeDefines(result: FileParseResult, srcName: string, dstName: string): boolean {
+    const sourceEntities = result.entities.filter(e => e.name === srcName || qualifiedKey(e) === srcName);
+    if (sourceEntities.length === 0) return false;
+    return result.entities.some(definition =>
+      definition.name === dstName && sourceEntities.some(source =>
+        definition.lineStart >= source.lineStart && definition.lineEnd <= source.lineEnd,
+      ),
+    );
+  }
+
   const resolved: ResolvedEdge[] = [];
 
   for (const result of results) {
     const srcFilePath = result.filePath;
     const srcLanguage = result.language;
-    const srcSymbols = fileHasSymbol.get(srcFilePath)!;
 
     // Build the set of file paths this file explicitly imports.
     const importedFilePaths = new Set<string>();
@@ -3598,6 +3633,40 @@ export function resolveEdges(
       // back to the source call by name). No-op unless this is a renamed-import call.
       const dstName = (rel.predicate === 'CALLS' ? callBindings.get(srcFilePath)?.get(rel.dstName) : undefined) ?? rel.dstName;
       const srcName = rel.srcName;
+      const binding = importBindingsByLocal.get(srcFilePath)?.get(origDstName);
+
+      // Tier 1: same-file — already correct in buildPatch, skip here. Check the
+      // call-site name before any import binding rewrite so a local shadow wins.
+      // Without an import binding, preserve the existing file-wide preference.
+      const hasSameFileDefinition = fileHasSymbol.get(srcFilePath)?.has(origDstName) === true;
+      if (hasSameFileDefinition && (!binding || sameScopeDefines(result, srcName, origDstName))) continue;
+
+      if (rel.predicate === 'CALLS' || rel.predicate === 'EXTENDS' || rel.predicate === 'REFERENCES') {
+        if (binding) {
+          const providerFiles = [...new Set(resolveImportTargets(srcFilePath, srcLanguage, binding.pkg))];
+          const publicMatches: Array<{ fp: string; local: string }> = [];
+          for (const fp of providerFiles.length === 1 ? providerFiles : []) {
+            const local = filePublicNames.get(fp)?.get(binding.imported);
+            if (local && fileHasSymbol.get(fp)?.has(local)) publicMatches.push({ fp, local });
+          }
+          if (publicMatches.length === 1) {
+            const { fp, local } = publicMatches[0];
+            const dstQualifiedKey = bestQKey(fileQKeys, fp, local);
+            if (dstQualifiedKey !== null) {
+              resolved.push({
+                srcFilePath,
+                srcName,
+                dstFilePath: fp,
+                dstName: origDstName,
+                dstQualifiedKey,
+                predicate: rel.predicate,
+                confidence: 0.9,
+              });
+              continue;
+            }
+          }
+        }
+      }
 
       // Tier 1b: qualifier-assisted (confidence 0.9 / 0.7)
       // For dotted names like "NodeKind.Decision" (emitted by field_expression queries):
@@ -3666,9 +3735,6 @@ export function resolveEdges(
           continue; // qualified name exhausted — don't try bare-name tiers
         }
       }
-
-      // Tier 1: same-file — already correct in buildPatch, skip here
-      if (srcSymbols.has(dstName)) continue;
 
       // Tier 2: import-scoped (confidence 0.9)
       const importMatches: string[] = [];

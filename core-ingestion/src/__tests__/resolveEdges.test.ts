@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildGlobalResolutionIndex, resolveEdges, type FileParseResult, type ParsedEntity, type ParsedRelationship } from '../index.js';
+import { buildGlobalResolutionIndex, parseFile, resolveEdges, type FileParseResult, type ParsedEntity, type ParsedRelationship } from '../index.js';
 import { SupportedLanguages } from '../languages.js';
 
 function entity(
@@ -283,6 +283,203 @@ describe('resolveEdges', () => {
       dstName: 'crossBatchTarget',
       dstQualifiedKey: 'crossBatchTarget',
       predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('resolves a call through a provider export alias', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'function impl() { return 1; }\nexport { impl as publicFn };\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import { publicFn } from "./provider";\nexport function caller() { return publicFn(); }\n',
+    )!;
+    const unrelated = parseFile(
+      '/repo/unrelated.ts',
+      'export function publicFn() { return 2; }\n',
+    )!;
+
+    const resolved = resolveEdges([consumer, provider, unrelated]);
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'publicFn',
+      dstQualifiedKey: 'impl',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/unrelated.ts')).toBe(false);
+  });
+
+  it('resolves a default import to the provider local symbol', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'function actualName() { return 1; }\nexport default actualName;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import localName from "./provider";\nexport function caller() { return localName(); }\n',
+    )!;
+    const unrelated = parseFile(
+      '/repo/unrelated.ts',
+      'export function localName() { return 2; }\n',
+    )!;
+
+    const resolved = resolveEdges([consumer, provider, unrelated]);
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'localName',
+      dstQualifiedKey: 'actualName',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/unrelated.ts')).toBe(false);
+  });
+
+  it('resolves provider public names from the global index', () => {
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import localName from "./provider";\nexport function caller() { return localName(); }\n',
+    )!;
+    const providerPath = '/repo/provider.ts';
+    const globalIndex = buildGlobalResolutionIndex(
+      ['/repo/consumer.ts', providerPath],
+      new Map([[providerPath, 'function actualName() { return 1; }\nexport default actualName;\n']]),
+    );
+
+    expect(resolveEdges([consumer], undefined, globalIndex)).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'caller',
+      dstFilePath: providerPath,
+      dstName: 'localName',
+      dstQualifiedKey: 'actualName',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('does not resolve a shadowed import name to the provider', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'function actualName() { return 1; }\nexport default actualName;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import localName from "./provider";\nexport function caller() { const localName = () => 2; return localName(); }\n',
+    )!;
+
+    const resolved = resolveEdges([consumer, provider]);
+    expect(resolved.some(edge => edge.predicate === 'CALLS' && edge.dstFilePath === '/repo/provider.ts')).toBe(false);
+  });
+
+  it('still resolves the import outside the scope that shadows it', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'function Actual() { return 1; }\nexport default Actual;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import Local from "./provider";\nfunction shadow() {\n  const Local = () => 2;\n  return Local();\n}\nexport function caller() {\n  return Local();\n}\n',
+    )!;
+
+    const calls = resolveEdges([consumer, provider]).filter(edge => edge.predicate === 'CALLS');
+    expect(calls).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'Local',
+      dstQualifiedKey: 'Actual',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+    expect(calls.some(edge => edge.srcName === 'shadow' && edge.dstFilePath === '/repo/provider.ts')).toBe(false);
+  });
+
+  it('keeps ordinary same-file calls ahead of imported provider symbols', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'export function other() {}\nexport function helper() {}\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import { other } from "./provider";\nfunction helper() {}\nexport function caller() { return helper(); }\n',
+    )!;
+
+    const resolved = resolveEdges([consumer, provider]);
+    expect(resolved.some(edge => edge.predicate === 'CALLS' && edge.dstFilePath === '/repo/provider.ts')).toBe(false);
+  });
+
+  it('does not use a public export name to choose between ambiguous modules', () => {
+    const consumer = parseFile(
+      '/repo/a/consumer.ts',
+      'import { publicFn } from "./provider";\nexport function caller() { return publicFn(); }\n',
+    )!;
+    const intendedProvider = parseFile(
+      '/repo/a/provider.ts',
+      'export function otherFn() { return 1; }\n',
+    )!;
+    const unrelatedProvider = parseFile(
+      '/repo/b/provider.ts',
+      'function impl() { return 2; }\nexport { impl as publicFn };\n',
+    )!;
+
+    const resolved = resolveEdges([consumer, intendedProvider, unrelatedProvider]);
+    expect(resolved.some(edge => edge.predicate === 'CALLS')).toBe(false);
+  });
+
+  it('does not confuse a provider public name with a different local entity', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'function impl() { return 1; }\nexport { impl as publicFn };\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import { publicFn as localFn } from "./provider";\nfunction publicFn() { return 2; }\nexport function caller() { return localFn(); }\n',
+    )!;
+
+    expect(resolveEdges([consumer, provider])).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'localFn',
+      dstQualifiedKey: 'impl',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('resolves default imports used in inheritance and type references', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'class ActualBase {}\nexport default ActualBase;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import LocalBase from "./provider";\nexport class Child extends LocalBase {}\nexport function takes(value: LocalBase) { return value; }\n',
+    )!;
+
+    const resolved = resolveEdges([consumer, provider]);
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'Child',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'LocalBase',
+      dstQualifiedKey: 'ActualBase',
+      predicate: 'EXTENDS',
+      confidence: 0.9,
+    });
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/consumer.ts',
+      srcName: 'takes',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'LocalBase',
+      dstQualifiedKey: 'ActualBase',
+      predicate: 'REFERENCES',
       confidence: 0.9,
     });
   });
