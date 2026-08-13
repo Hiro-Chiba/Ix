@@ -38,6 +38,30 @@ export function shouldSkipAutoMap(opts: { auto: boolean; cloudReady: boolean }):
   return true;
 }
 
+/** Optional exit code for callers that must distinguish coalescing from success. */
+export function requestedMapCoalesceExitCode(
+  raw = process.env.IX_MAP_COALESCE_EXIT_CODE,
+): number | undefined {
+  if (raw === undefined) return undefined;
+  const code = Number(raw);
+  return Number.isInteger(code) && code >= 1 && code <= 255 ? code : undefined;
+}
+
+export function applyRequestedMapCoalesceExitCode(
+  raw = process.env.IX_MAP_COALESCE_EXIT_CODE,
+  apply: (code: number) => void = code => { process.exitCode = code; },
+): boolean {
+  const code = requestedMapCoalesceExitCode(raw);
+  if (code === undefined) return false;
+  apply(code);
+  return true;
+}
+
+/** Watch opts into full patches; ordinary `ix map` keeps its topology-only ingest. */
+export function mapModeForIngest(raw = process.env.IX_MAP_FULL_INGEST): boolean {
+  return raw !== "1";
+}
+
 export interface MapRegion {
   id: string;
   label: string;
@@ -175,6 +199,7 @@ Examples:
         if (!silent && opts.format !== "json" && opts.format !== "llm") {
           process.stderr.write(chalk.dim("  Another ix map is already running for this workspace — skipping.\n"));
         }
+        applyRequestedMapCoalesceExitCode();
         return; // coalesce; the in-flight map will refresh the graph
       }
 
@@ -256,7 +281,7 @@ Examples:
             format: (machineFormat || silent) ? "json" : "text",
             printSummary: false,
             suppressOutput: true,
-            mapMode: true,
+            mapMode: mapModeForIngest(),
             deadlineSignal,
             // `ix map` has no --debug, so the per-file `[commit error] <uri>`
             // detail was unreachable from the command that produced the
