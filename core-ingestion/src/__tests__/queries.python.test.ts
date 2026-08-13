@@ -90,6 +90,19 @@ def top_level():
     });
   });
 
+  it('preserves Python from-import aliases as local bindings', () => {
+    const result = parseFile(
+      '/repo/pkg/caller.py',
+      'from .utils import target as local\n\ndef caller():\n    return local()\n',
+    );
+
+    expect(result!.importBindings).toContainEqual({
+      pkg: '.utils',
+      local: 'local',
+      imported: 'target',
+    });
+  });
+
   it('resolves qualifier from constructor call assignment (Pattern 1)', () => {
     const result = parseFile(
       '/repo/views.py',

@@ -2293,9 +2293,10 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         if (name && name !== '*' && name.length > 1) {
           const rawModule = match.captures.find((c: any) => c.name === 'import.module')?.node.text;
           if (language === SupportedLanguages.Python && rawModule) {
+            const local = match.captures.find((c: any) => c.name === 'import.local')?.node.text ?? name;
             const dotsOnly = /^\.+$/.test(rawModule);
             const pkg = dotsOnly ? `${rawModule}${name}` : rawModule;
-            importBindings.push({ pkg, local: name, imported: name });
+            importBindings.push({ pkg, local, imported: name });
             if (dotsOnly) {
               entities.push({ name, kind: 'module', lineStart: importName.node.startPosition.row + 1, lineEnd: importName.node.startPosition.row + 1, language });
               relationships.push({ srcName: fileName, dstName: name, predicate: 'IMPORTS', importRaw: pkg });
@@ -3165,8 +3166,12 @@ export function resolveEdges(
   // Keep a normalized path lookup so they do not fall back to a same-named file
   // elsewhere in the repository.
   const normalizedPathToFiles = new Map<string, string[]>();
-  const addIndexedPath = (filePath: string): void => {
+  const normalizedPathKey = (filePath: string): string => {
     const normalized = nodePath.posix.normalize(filePath.replace(/\\/g, '/'));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const addIndexedPath = (filePath: string): void => {
+    const normalized = normalizedPathKey(filePath);
     const files = normalizedPathToFiles.get(normalized) ?? [];
     if (!files.includes(filePath)) files.push(filePath);
     normalizedPathToFiles.set(normalized, files);
@@ -3383,7 +3388,10 @@ export function resolveEdges(
       (srcLanguage === SupportedLanguages.JavaScript || srcLanguage === SupportedLanguages.TypeScript) &&
       (importRaw.startsWith('./') || importRaw.startsWith('../'))
     ) {
-      return nodePath.posix.normalize(nodePath.posix.join(sourceDir, importRaw));
+      // Bundlers use query/hash suffixes to select loaders or virtual variants;
+      // the on-disk module path is the portion before that URL metadata.
+      const pathSpecifier = importRaw.replace(/[?#].*$/, '');
+      return nodePath.posix.normalize(nodePath.posix.join(sourceDir, pathSpecifier));
     }
 
     if (srcLanguage === SupportedLanguages.Python && importRaw.startsWith('.')) {
@@ -3416,7 +3424,10 @@ export function resolveEdges(
       const extension = nodePath.posix.extname(target).toLowerCase();
       const base = extension.length > 0 ? target.slice(0, -extension.length) : target;
       const addSourceVariants = (pathBase: string): void => {
-        for (const suffix of ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs']) {
+        const suffixes = srcLanguage === SupportedLanguages.JavaScript
+          ? ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.d.ts']
+          : ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs'];
+        for (const suffix of suffixes) {
           candidatePaths.push(`${pathBase}${suffix}`);
         }
       };
@@ -3425,16 +3436,23 @@ export function resolveEdges(
         addSourceVariants(target);
         addSourceVariants(nodePath.posix.join(target, 'index'));
       } else if (extension === '.js') {
-        for (const suffix of ['.ts', '.tsx', '.d.ts', '.js']) candidatePaths.push(`${base}${suffix}`);
+        const suffixes = srcLanguage === SupportedLanguages.JavaScript
+          ? ['.js', '.ts', '.tsx', '.d.ts']
+          : ['.ts', '.tsx', '.d.ts', '.js'];
+        for (const suffix of suffixes) candidatePaths.push(`${base}${suffix}`);
       } else if (extension === '.jsx') {
-        for (const suffix of ['.tsx', '.d.ts', '.jsx']) candidatePaths.push(`${base}${suffix}`);
+        const suffixes = srcLanguage === SupportedLanguages.JavaScript
+          ? ['.jsx', '.tsx', '.d.ts']
+          : ['.tsx', '.d.ts', '.jsx'];
+        for (const suffix of suffixes) candidatePaths.push(`${base}${suffix}`);
       } else {
         candidatePaths.push(target);
       }
     }
 
     for (const candidatePath of candidatePaths) {
-      const matches = normalizedPathToFiles.get(candidatePath) ?? [];
+      const matches = (normalizedPathToFiles.get(normalizedPathKey(candidatePath)) ?? [])
+        .filter(filePath => normalizedPathKey(filePath) !== normalizedPathKey(srcFilePath));
       if (matches.length > 0) return matches;
     }
     return [];
