@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, rmSync, chmodSync, renameSync } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import { isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
@@ -133,11 +133,24 @@ export function loadWorkspaces(): WorkspaceConfig[] {
   return config.workspaces ?? []; // workspace_id already normalized to string in loadConfig
 }
 
-export function findWorkspaceForCwd(cwd: string): WorkspaceConfig | undefined {
-  const workspaces = loadWorkspaces();
+export function selectWorkspaceForCwd(
+  workspaces: WorkspaceConfig[],
+  cwd: string,
+): WorkspaceConfig | undefined {
+  const resolvedCwd = resolvePath(cwd);
   return workspaces
-    .filter(w => cwd.startsWith(w.root_path))
+    .filter((workspace) => {
+      const relativePath = relative(resolvePath(workspace.root_path), resolvedCwd);
+      return (
+        relativePath === "" ||
+        (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
+      );
+    })
     .sort((a, b) => b.root_path.length - a.root_path.length)[0];
+}
+
+export function findWorkspaceForCwd(cwd: string): WorkspaceConfig | undefined {
+  return selectWorkspaceForCwd(loadWorkspaces(), cwd);
 }
 
 export function getDefaultWorkspace(): WorkspaceConfig | undefined {

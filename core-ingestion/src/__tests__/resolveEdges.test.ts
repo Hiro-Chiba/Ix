@@ -314,6 +314,30 @@ describe('resolveEdges', () => {
     expect(resolved.some(edge => edge.dstFilePath === '/repo/unrelated.ts')).toBe(false);
   });
 
+  it('uses the relative provider path before resolving its public export name', () => {
+    const consumer = parseFile(
+      '/repo/a/consumer.ts',
+      'import { publicFn } from "./provider";\nexport function caller() { return publicFn(); }\n',
+    )!;
+    const intendedProvider = parseFile(
+      '/repo/a/provider.ts',
+      'function impl() { return 1; }\nexport { impl as publicFn };\n',
+    )!;
+    const sameStemProvider = parseFile(
+      '/repo/b/provider.ts',
+      'function otherImpl() { return 2; }\nexport { otherImpl as publicFn };\n',
+    )!;
+
+    const calls = resolveEdges([consumer, intendedProvider, sameStemProvider])
+      .filter(edge => edge.predicate === 'CALLS');
+    expect(calls).toEqual([expect.objectContaining({
+      srcFilePath: '/repo/a/consumer.ts',
+      dstFilePath: '/repo/a/provider.ts',
+      dstName: 'publicFn',
+      dstQualifiedKey: 'impl',
+    })]);
+  });
+
   it('resolves a default import to the provider local symbol', () => {
     const provider = parseFile(
       '/repo/provider.ts',
@@ -398,6 +422,81 @@ describe('resolveEdges', () => {
       confidence: 0.9,
     });
     expect(calls.some(edge => edge.srcName === 'shadow' && edge.dstFilePath === '/repo/provider.ts')).toBe(false);
+  });
+
+  it('does not let a nested-function binding shadow an outer imported use', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'function Actual() { return 1; }\nexport default Actual;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import Local from "./provider";\nexport function caller() {\n  function nested() {\n    const Local = () => 2;\n    return Local();\n  }\n  nested();\n  return Local();\n}\n',
+    )!;
+
+    const calls = resolveEdges([consumer, provider]).filter(edge => edge.predicate === 'CALLS');
+    expect(calls).toContainEqual(expect.objectContaining({
+      srcName: 'caller',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'Local',
+      dstQualifiedKey: 'Actual',
+    }));
+    expect(calls.some(edge => edge.srcName === 'nested' && edge.dstFilePath === '/repo/provider.ts')).toBe(false);
+  });
+
+  it('does not resolve a parameter that shadows an imported name', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'function Actual() { return 1; }\nexport default Actual;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import Local from "./provider";\nexport function caller(Local: () => number) { return Local(); }\n',
+    )!;
+
+    expect(resolveEdges([consumer, provider]).some(edge =>
+      edge.predicate === 'CALLS' && edge.dstFilePath === '/repo/provider.ts',
+    )).toBe(false);
+  });
+
+  it('does not mistake an imported type annotation for a parameter binding', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'class Actual {}\nexport default Actual;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import Local from "./provider";\nexport function caller(value: Local) { return new Local(); }\n',
+    )!;
+
+    expect(resolveEdges([consumer, provider])).toContainEqual(expect.objectContaining({
+      srcName: 'caller',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'Local',
+      dstQualifiedKey: 'Actual',
+      predicate: 'CALLS',
+    }));
+  });
+
+  it('keeps TypeScript value and type shadowing separate', () => {
+    const provider = parseFile(
+      '/repo/provider.ts',
+      'class Actual {}\nexport default Actual;\n',
+    )!;
+    const consumer = parseFile(
+      '/repo/consumer.ts',
+      'import Local from "./provider";\nexport function caller(Local: () => number, value: Local) { return Local(); }\n',
+    )!;
+
+    const resolved = resolveEdges([consumer, provider]);
+    expect(resolved).toContainEqual(expect.objectContaining({
+      srcName: 'caller',
+      dstFilePath: '/repo/provider.ts',
+      dstName: 'Local',
+      dstQualifiedKey: 'Actual',
+      predicate: 'REFERENCES',
+    }));
+    expect(resolved.some(edge => edge.predicate === 'CALLS' && edge.dstFilePath === '/repo/provider.ts')).toBe(false);
   });
 
   it('keeps ordinary same-file calls ahead of imported provider symbols', () => {
@@ -638,6 +737,436 @@ describe('resolveEdges', () => {
 
     const resolved = resolveEdges([ambiguousCaller, imported, baz]);
     expect(resolved.filter(edge => edge.predicate === 'CALLS')).toEqual([]);
+  });
+
+  it('uses a TypeScript relative import path to disambiguate duplicate file stems', () => {
+    const caller = parseFile(
+      '/repo/a/caller.ts',
+      'import { target } from "./utils";\nexport function caller() { return target(); }\n',
+    )!;
+    const localUtils = fileResult(
+      '/repo/a/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+    const unrelatedUtils = fileResult(
+      '/repo/b/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    const resolved = resolveEdges([caller, localUtils, unrelatedUtils]);
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/a/caller.ts',
+      srcName: 'caller.ts',
+      dstFilePath: '/repo/a/utils.ts',
+      dstName: 'utils',
+      dstQualifiedKey: 'utils.ts',
+      predicate: 'IMPORTS',
+      confidence: 0.9,
+    });
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/a/caller.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/a/utils.ts',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/b/utils.ts')).toBe(false);
+  });
+
+  it('resolves parent-relative JavaScript imports to TypeScript source files', () => {
+    const caller = fileResult(
+      '/repo/features/a/caller.ts',
+      SupportedLanguages.TypeScript,
+      [entity('caller', SupportedLanguages.TypeScript)],
+      [
+        { srcName: 'caller.ts', dstName: 'utils.js', predicate: 'IMPORTS', importRaw: '../../shared/utils.js' },
+        { srcName: 'caller', dstName: 'target', predicate: 'CALLS' },
+      ],
+    );
+    const target = fileResult(
+      '/repo/shared/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+    const runtimeTarget = fileResult(
+      '/repo/shared/utils.js',
+      SupportedLanguages.JavaScript,
+      [entity('target', SupportedLanguages.JavaScript)],
+    );
+    const collision = fileResult(
+      '/repo/other/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    const resolved = resolveEdges([caller, target, runtimeTarget, collision]);
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/features/a/caller.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/shared/utils.ts',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/shared/utils.js')).toBe(false);
+  });
+
+  it('prefers the runtime JavaScript file for a JavaScript caller', () => {
+    const caller = parseFile(
+      '/repo/a/caller.js',
+      'import { target } from "./utils.js";\nexport function caller() { return target(); }\n',
+    )!;
+    const runtimeTarget = fileResult(
+      '/repo/a/utils.js',
+      SupportedLanguages.JavaScript,
+      [entity('target', SupportedLanguages.JavaScript)],
+    );
+    const typeScriptTarget = fileResult(
+      '/repo/a/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    const resolved = resolveEdges([caller, runtimeTarget, typeScriptTarget]);
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/a/utils.js')).toBe(true);
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/a/utils.ts')).toBe(false);
+  });
+
+  it('resolves relative JavaScript imports with URL query and fragment suffixes', () => {
+    const caller = parseFile(
+      '/repo/a/caller.ts',
+      'import { target } from "./utils.ts?worker#entry";\nexport function caller() { return target(); }\n',
+    )!;
+    const target = fileResult(
+      '/repo/a/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    expect(resolveEdges([caller, target])).toContainEqual(expect.objectContaining({
+      srcFilePath: '/repo/a/caller.ts',
+      dstFilePath: '/repo/a/utils.ts',
+      predicate: 'CALLS',
+    }));
+  });
+
+  it('does not emit a file self-edge for a relative self-import', () => {
+    const caller = parseFile(
+      '/repo/a/caller.ts',
+      'import "./caller";\nexport function caller() {}\n',
+    )!;
+
+    expect(resolveEdges([caller])).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'win32')('matches relative paths case-insensitively on Windows', () => {
+    const caller = parseFile(
+      'repo\\a\\caller.ts',
+      'import { target } from "./Utils";\nexport function caller() { return target(); }\n',
+    )!;
+    const target = fileResult(
+      'repo\\a\\utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    expect(resolveEdges([caller, target])).toContainEqual(expect.objectContaining({
+      srcFilePath: 'repo\\a\\caller.ts',
+      dstFilePath: 'repo\\a\\utils.ts',
+      predicate: 'CALLS',
+    }));
+  });
+
+  it('does not fall back to an unrelated same-stem file when the relative target is missing', () => {
+    const caller = parseFile(
+      '/repo/a/caller.ts',
+      'import { target } from "./utils";\nexport function caller() { return target(); }\n',
+    )!;
+    const unrelatedUtils = fileResult(
+      '/repo/b/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    expect(resolveEdges([caller, unrelatedUtils])).toEqual([]);
+  });
+
+  it('resolves a relative import to a directory index', () => {
+    const caller = fileResult(
+      '/repo/a/caller.ts',
+      SupportedLanguages.TypeScript,
+      [entity('caller', SupportedLanguages.TypeScript)],
+      [
+        { srcName: 'caller.ts', dstName: 'services', predicate: 'IMPORTS', importRaw: './services' },
+        { srcName: 'caller', dstName: 'target', predicate: 'CALLS' },
+      ],
+    );
+    const index = fileResult(
+      '/repo/a/services/index.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+    const collision = fileResult(
+      '/repo/b/services/index.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    expect(resolveEdges([caller, index, collision])).toContainEqual({
+      srcFilePath: '/repo/a/caller.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/a/services/index.ts',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('prefers a direct TypeScript module over its directory index', () => {
+    const caller = parseFile(
+      '/repo/a/caller.ts',
+      'import { target } from "./services";\nexport function caller() { return target(); }\n',
+    )!;
+    const direct = fileResult(
+      '/repo/a/services.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+    const index = fileResult(
+      '/repo/a/services/index.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    const resolved = resolveEdges([caller, direct, index]);
+    expect(resolved).toContainEqual({
+      srcFilePath: '/repo/a/caller.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/a/services.ts',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/a/services/index.ts')).toBe(false);
+  });
+
+  it('uses a Python relative import path to disambiguate duplicate modules', () => {
+    const caller = parseFile(
+      '/repo/pkg/a/caller.py',
+      'from .utils import target\n\ndef caller():\n    return target()\n',
+    )!;
+    const localUtils = fileResult(
+      '/repo/pkg/a/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+    const unrelatedUtils = fileResult(
+      '/repo/pkg/b/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+
+    expect(resolveEdges([caller, localUtils, unrelatedUtils])).toContainEqual({
+      srcFilePath: '/repo/pkg/a/caller.py',
+      srcName: 'caller',
+      dstFilePath: '/repo/pkg/a/utils.py',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('resolves a Python from-dot import to the local module', () => {
+    const caller = parseFile(
+      '/repo/pkg/a/caller.py',
+      'from . import utils\n\ndef caller():\n    return utils.target()\n',
+    )!;
+    const localUtils = fileResult(
+      '/repo/pkg/a/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+    const unrelatedUtils = fileResult(
+      '/repo/pkg/b/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+
+    expect(resolveEdges([caller, localUtils, unrelatedUtils])).toContainEqual({
+      srcFilePath: '/repo/pkg/a/caller.py',
+      srcName: 'caller',
+      dstFilePath: '/repo/pkg/a/utils.py',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('resolves a Python relative import through its local alias', () => {
+    const caller = parseFile(
+      '/repo/pkg/a/caller.py',
+      'from .utils import target as local\n\ndef caller():\n    return local()\n',
+    )!;
+    const localUtils = fileResult(
+      '/repo/pkg/a/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+    const unrelatedLocal = fileResult(
+      '/repo/other/local.py',
+      SupportedLanguages.Python,
+      [entity('local', SupportedLanguages.Python)],
+    );
+
+    const resolved = resolveEdges([caller, localUtils, unrelatedLocal]);
+    expect(resolved).toContainEqual(expect.objectContaining({
+      srcFilePath: '/repo/pkg/a/caller.py',
+      srcName: 'caller',
+      dstFilePath: '/repo/pkg/a/utils.py',
+      dstName: 'local',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    }));
+    expect(resolved.some(edge => edge.dstFilePath === '/repo/other/local.py')).toBe(false);
+  });
+
+  it('does not globally resolve a missing Python relative import when other imports exist', () => {
+    const caller = parseFile(
+      '/repo/pkg/a/caller.py',
+      'from .missing import target\nimport os\n\ndef caller():\n    return target()\n',
+    )!;
+    const unrelatedTarget = fileResult(
+      '/repo/other/target.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+
+    expect(resolveEdges([caller, unrelatedTarget])).toEqual([]);
+  });
+
+  it('keeps a Python imported symbol scoped to its relative module', () => {
+    const caller = fileResult(
+      '/repo/pkg/a/caller.py',
+      SupportedLanguages.Python,
+      [entity('caller', SupportedLanguages.Python)],
+      [
+        { srcName: 'caller.py', dstName: 'utils', predicate: 'IMPORTS', importRaw: '.utils' },
+        { srcName: 'caller.py', dstName: 'target', predicate: 'IMPORTS' },
+        { srcName: 'caller', dstName: 'target', predicate: 'CALLS' },
+      ],
+    );
+    const localUtils = fileResult(
+      '/repo/pkg/a/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+    const unrelatedTarget = fileResult(
+      '/repo/other/target.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+
+    expect(resolveEdges([caller, localUtils, unrelatedTarget])).toContainEqual({
+      srcFilePath: '/repo/pkg/a/caller.py',
+      srcName: 'caller',
+      dstFilePath: '/repo/pkg/a/utils.py',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('resolves a parent-relative Python import from its package path', () => {
+    const caller = fileResult(
+      '/repo/pkg/sub/caller.py',
+      SupportedLanguages.Python,
+      [entity('caller', SupportedLanguages.Python)],
+      [
+        { srcName: 'caller.py', dstName: 'shared.utils', predicate: 'IMPORTS', importRaw: '..shared.utils' },
+        { srcName: 'caller', dstName: 'target', predicate: 'CALLS' },
+      ],
+    );
+    const target = fileResult(
+      '/repo/pkg/shared/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+    const collision = fileResult(
+      '/repo/other/shared/utils.py',
+      SupportedLanguages.Python,
+      [entity('target', SupportedLanguages.Python)],
+    );
+
+    expect(resolveEdges([caller, target, collision])).toContainEqual({
+      srcFilePath: '/repo/pkg/sub/caller.py',
+      srcName: 'caller',
+      dstFilePath: '/repo/pkg/shared/utils.py',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('uses relative paths when candidates come from the global index', () => {
+    const caller = parseFile(
+      '/repo/a/caller.ts',
+      'import { target } from "./utils";\nexport function caller() { return target(); }\n',
+    )!;
+    const localPath = '/repo/a/utils.ts';
+    const unrelatedPath = '/repo/b/utils.ts';
+    const globalIndex = buildGlobalResolutionIndex(
+      [localPath, unrelatedPath],
+      new Map([
+        [localPath, 'export function target() { return 1; }\n'],
+        [unrelatedPath, 'export function target() { return 2; }\n'],
+      ]),
+    );
+
+    expect(resolveEdges([caller], undefined, globalIndex)).toContainEqual({
+      srcFilePath: '/repo/a/caller.ts',
+      srcName: 'caller',
+      dstFilePath: '/repo/a/utils.ts',
+      dstName: 'target',
+      dstQualifiedKey: 'target',
+      predicate: 'CALLS',
+      confidence: 0.9,
+    });
+  });
+
+  it('does not use path narrowing for bare module imports', () => {
+    const caller = fileResult(
+      '/repo/a/caller.ts',
+      SupportedLanguages.TypeScript,
+      [entity('caller', SupportedLanguages.TypeScript)],
+      [
+        { srcName: 'caller.ts', dstName: 'utils', predicate: 'IMPORTS', importRaw: 'utils' },
+        { srcName: 'caller', dstName: 'target', predicate: 'CALLS' },
+      ],
+    );
+    const first = fileResult(
+      '/repo/a/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+    const second = fileResult(
+      '/repo/b/utils.ts',
+      SupportedLanguages.TypeScript,
+      [entity('target', SupportedLanguages.TypeScript)],
+    );
+
+    expect(resolveEdges([caller, first, second])).toEqual([]);
   });
 
   it('resolves tier-2.5 transitive imports', () => {
