@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, rmSync, chmodSync, renameSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync, chmodSync, renameSync, realpathSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -75,7 +75,9 @@ const OSS_OWNED_KEYS = new Set<keyof IxConfig>([
 ]);
 
 export function saveConfig(config: IxConfig): void {
-  const configPath = join(homedir(), ".ix", "config.yaml");
+  const configDir = join(homedir(), ".ix");
+  const configPath = join(configDir, "config.yaml");
+  mkdirSync(configDir, { recursive: true });
   let existing: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {

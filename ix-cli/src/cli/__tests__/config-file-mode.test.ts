@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as nodePath from "node:path";
+import { parse } from "yaml";
 
 import { saveConfig } from "../config.js";
 
@@ -16,7 +17,6 @@ beforeEach(() => {
   savedProfile = process.env.USERPROFILE;
   process.env.HOME = home;
   process.env.USERPROFILE = home;
-  fs.mkdirSync(nodePath.join(home, ".ix"), { recursive: true });
 });
 
 afterEach(() => {
@@ -26,23 +26,76 @@ afterEach(() => {
 });
 
 const cfgPath = () => nodePath.join(home, ".ix", "config.yaml");
+const cfgDir = () => nodePath.dirname(cfgPath());
+const readConfig = () => parse(fs.readFileSync(cfgPath(), "utf8")) as Record<string, unknown>;
 
 // POSIX permission bits are meaningless on Windows (chmod only toggles the
 // read-only bit), so statSync reports modes like 0o666 and these assertions
 // can't hold. The 0600 guard protects unix-like systems; skip the checks there.
 const posix = process.platform !== "win32";
 
-describe("saveConfig file mode (credentials live in this file)", () => {
+describe("saveConfig persistence", () => {
+  it("creates a config from a fresh home without leaving the staging file", () => {
+    expect(fs.existsSync(cfgDir())).toBe(false);
+
+    saveConfig({ endpoint: "http://localhost:8090", format: "json" });
+
+    expect(readConfig()).toMatchObject({ endpoint: "http://localhost:8090", format: "json" });
+    expect(fs.readdirSync(cfgDir())).toEqual(["config.yaml"]);
+  });
+
   it.skipIf(!posix)("creates the config 0600", () => {
     saveConfig({ endpoint: "http://localhost:8090", format: "text" });
     expect(fs.statSync(cfgPath()).mode & 0o777).toBe(0o600);
   });
 
   it.skipIf(!posix)("tightens a pre-existing group/world-readable config to 0600", () => {
+    fs.mkdirSync(cfgDir(), { recursive: true });
     fs.writeFileSync(cfgPath(), "endpoint: http://localhost:8090\nformat: text\n", { mode: 0o644 });
     fs.chmodSync(cfgPath(), 0o644); // force 0644 regardless of umask
     saveConfig({ endpoint: "http://localhost:8090", format: "text" });
     // No group/world bits remain.
     expect(fs.statSync(cfgPath()).mode & 0o077).toBe(0);
+  });
+
+  it.skipIf(!posix)("atomically replaces an existing config and removes the staging file", () => {
+    fs.mkdirSync(cfgDir(), { recursive: true });
+    fs.writeFileSync(cfgPath(), "endpoint: http://old.example\nformat: text\n");
+    const previousInode = fs.statSync(cfgPath()).ino;
+
+    saveConfig({ endpoint: "http://new.example", format: "json" });
+
+    const currentInode = fs.statSync(cfgPath()).ino;
+    if (previousInode !== 0 && currentInode !== 0) expect(currentInode).not.toBe(previousInode);
+    expect(fs.readdirSync(cfgDir())).toEqual(["config.yaml"]);
+    expect(readConfig()).toMatchObject({ endpoint: "http://new.example", format: "json" });
+  });
+
+  it("preserves extension and user-owned fields in an existing config", () => {
+    fs.mkdirSync(cfgDir(), { recursive: true });
+    fs.writeFileSync(
+      cfgPath(),
+      [
+        "endpoint: http://old.example",
+        "format: text",
+        "active: private-cloud",
+        "instances:",
+        "  private-cloud:",
+        "    refresh_token: secret",
+        "user:",
+        "  name: Alice",
+        "",
+      ].join("\n"),
+    );
+
+    saveConfig({ endpoint: "http://new.example", format: "json" });
+
+    expect(readConfig()).toEqual({
+      active: "private-cloud",
+      instances: { "private-cloud": { refresh_token: "secret" } },
+      user: { name: "Alice" },
+      endpoint: "http://new.example",
+      format: "json",
+    });
   });
 });
