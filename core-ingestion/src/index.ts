@@ -3390,7 +3390,12 @@ export function resolveEdges(
     ) {
       // Bundlers use query/hash suffixes to select loaders or virtual variants;
       // the on-disk module path is the portion before that URL metadata.
-      const pathSpecifier = importRaw.replace(/[?#].*$/, '');
+      const queryIndex = importRaw.indexOf('?');
+      const fragmentIndex = importRaw.indexOf('#');
+      const suffixIndex = queryIndex === -1
+        ? fragmentIndex
+        : fragmentIndex === -1 ? queryIndex : Math.min(queryIndex, fragmentIndex);
+      const pathSpecifier = suffixIndex === -1 ? importRaw : importRaw.slice(0, suffixIndex);
       return nodePath.posix.normalize(nodePath.posix.join(sourceDir, pathSpecifier));
     }
 
