@@ -44,6 +44,13 @@ describe("saveConfig persistence", () => {
     expect(fs.readdirSync(cfgDir())).toEqual(["config.yaml"]);
   });
 
+  it.skipIf(!posix)("creates the config directory 0700", () => {
+    // The 0600 on the file is undone by a 0755 directory beside it: the names
+    // in ~/.ix are themselves a disclosure, and this is the call that creates it.
+    saveConfig({ endpoint: "http://localhost:8090", format: "text" });
+    expect(fs.statSync(cfgDir()).mode & 0o777).toBe(0o700);
+  });
+
   it.skipIf(!posix)("creates the config 0600", () => {
     saveConfig({ endpoint: "http://localhost:8090", format: "text" });
     expect(fs.statSync(cfgPath()).mode & 0o777).toBe(0o600);
