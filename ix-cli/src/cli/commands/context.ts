@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -29,7 +29,7 @@ const BUNDLE_SCHEMA = "ix-context-bundle/1";
 interface ContextOptions {
   kind?: string;
   path?: string;
-  pick?: string;
+  pick?: number;
   depth?: string;
   asOfRev?: string;
   maxEntities?: string;
@@ -41,6 +41,14 @@ interface ContextOptions {
   resume?: string;
   diff?: string;
   format: string;
+}
+
+function parsePickOption(value: string): number {
+  const normalized = value.trim();
+  if (!/^[+-]?\d+$/.test(normalized)) {
+    throw new InvalidArgumentError("must be an integer (for example, 1 or 2)");
+  }
+  return Number(normalized);
 }
 
 /** Stable evidence kinds, ordered by relevance tier (lower is more relevant). */
@@ -119,7 +127,7 @@ export function registerContextCommand(program: Command): void {
     )
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--depth <depth>", "Context-graph expansion depth")
     .option("--as-of-rev <n>", "Historical context as of a graph revision")
     .option("--max-entities <n>", "Maximum entities in the bundle", "50")
@@ -162,7 +170,7 @@ export function registerContextCommand(program: Command): void {
       const resolved = await resolveFileOrEntity(client, target, {
         kind: opts.kind,
         path: opts.path,
-        pick: opts.pick ? parseInt(opts.pick, 10) : undefined,
+        pick: opts.pick,
       });
       if (!resolved) return;
 
@@ -243,14 +251,14 @@ export function registerContextCommand(program: Command): void {
 
 async function buildFreshBundle(
   target: string,
-  opts: { kind?: string; path?: string; pick?: string; depth?: string; asOfRev?: string },
+  opts: { kind?: string; path?: string; pick?: number; depth?: string; asOfRev?: string },
   budgets: { maxEntities: number; maxRelationships: number; maxEvidence: number; maxChars: number },
 ): Promise<ContextBundle | undefined> {
   const client = new IxClient(getEndpoint());
   const resolved = await resolveFileOrEntity(client, target, {
     kind: opts.kind,
     path: opts.path,
-    pick: opts.pick ? parseInt(opts.pick, 10) : undefined,
+    pick: opts.pick,
   });
   if (!resolved) return undefined;
 
