@@ -10,6 +10,7 @@ import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, resolveEntityFull, printResolved, looksFileLike, type ResolvedEntity } from "../resolve.js";
 import { formatDiff, relativePath } from "../format.js";
 import { llmLine, llmError } from "../llm.js";
+import { parsePickOption } from "../options.js";
 
 /** Render a `--summary` diff as a single llm record. */
 function renderDiffSummaryLlm(result: any): string {
@@ -419,7 +420,7 @@ export function registerDiffCommand(program: Command): void {
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .addHelpText("after", `\nExamples:
   ix diff 3 5
   ix diff 3 5 ix-cli/src/cli/commands/decide.ts
@@ -428,7 +429,7 @@ export function registerDiffCommand(program: Command): void {
   ix diff 3 5 --summary`)
     .action(async (fromRev: string, toRev: string, target: string | undefined, opts: {
       entity?: string; summary?: boolean; content?: boolean; limit?: string; full?: boolean; format: string;
-      kind?: string; path?: string; pick?: string;
+      kind?: string; path?: string; pick?: number;
     }) => {
       const client = new IxClient(getEndpoint());
       const from = parseInt(fromRev, 10);
@@ -438,7 +439,7 @@ export function registerDiffCommand(program: Command): void {
       const resolveOpts = {
         kind: opts.kind,
         path: opts.path,
-        pick: opts.pick ? parseInt(opts.pick, 10) : undefined,
+        pick: opts.pick,
       };
       let entityId: string | undefined = opts.entity;
       let resolved: ResolvedEntity | null = null;

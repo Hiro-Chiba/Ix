@@ -1,4 +1,4 @@
-import { InvalidArgumentError, type Command } from "commander";
+import type { Command } from "commander";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,6 +16,7 @@ import type {
 import { getEndpoint } from "../config.js";
 import { collectFacts, type EntityFacts } from "../explain/facts.js";
 import { printLlmLines } from "../llm.js";
+import { parsePickOption } from "../options.js";
 import { resolveFileOrEntity } from "../resolve.js";
 import { createStaleProbe } from "../stale.js";
 import { renderNote, renderSection, renderWarning } from "../ui.js";
@@ -41,14 +42,6 @@ interface ContextOptions {
   resume?: string;
   diff?: string;
   format: string;
-}
-
-function parsePickOption(value: string): number {
-  const normalized = value.trim();
-  if (!/^[+-]?\d+$/.test(normalized)) {
-    throw new InvalidArgumentError("must be an integer (for example, 1 or 2)");
-  }
-  return Number(normalized);
 }
 
 /** Stable evidence kinds, ordered by relevance tier (lower is more relevant). */

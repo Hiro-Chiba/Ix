@@ -6,6 +6,7 @@ import { resolveWorkspaceId } from "../bootstrap.js";
 import { resolveReadSystemId } from "../resolve.js";
 import { roundFloat } from "../format.js";
 import { llmLine, llmError } from "../llm.js";
+import { parsePickOption } from "../options.js";
 import { renderMapText, renderMapLlm, type MapRegion, type MapResult } from "./map.js";
 import {
   renderSubsystemExplanationJson,
@@ -58,7 +59,7 @@ export function registerSubsystemsCommand(program: Command): void {
     .option("--edge-cap <n>", "Max edges per direction per region in detailed mode")
     .option("--member-file-cap <n>", "Max member files per region in detailed mode")
     .option("--target <target>", "Scope subsystem output to a persisted architecture region")
-    .option("--pick <n>", "Resolve an ambiguous region target by numbered candidate")
+    .option("--pick <n>", "Resolve an ambiguous region target by numbered candidate", parsePickOption)
     .option("--level <n>",    "Filter to level (1=module, 2=subsystem, 3=system)")
     .option("--min-confidence <n>", "Only show regions above this confidence threshold (0-1)", "0")
     .option("--max-items <n>", "Max items to show per section in text output (default: 10)", "10")
@@ -96,7 +97,7 @@ Examples:
       edgeCap?: string;
       memberFileCap?: string;
       target?: string;
-      pick?: string;
+      pick?: number;
       level?: string;
       minConfidence: string;
       maxItems: string;
@@ -112,13 +113,7 @@ Examples:
       const systemId = await resolveReadSystemId(client);
       const scope = { workspaceId: systemId ? undefined : resolveWorkspaceId(), systemId };
       const target = resolveSubsystemTarget(positionalTarget, opts.target);
-      const pick = parsePickOption(opts.pick);
-
-      if (!target.error && pick.error) {
-        console.error(chalk.red("Error:"), pick.error);
-        process.exitCode = 1;
-        return;
-      }
+      const pick = { value: opts.pick };
       if (target.error) {
         console.error(chalk.red("Error:"), target.error);
         process.exitCode = 1;
@@ -456,15 +451,6 @@ function resolveSubsystemTarget(
   }
   const value = positional || explicit;
   return value ? { value } : {};
-}
-
-function parsePickOption(rawPick: string | undefined): { value?: number; error?: string } {
-  if (rawPick === undefined) return {};
-  const value = Number.parseInt(rawPick, 10);
-  if (!Number.isFinite(value) || value <= 0) {
-    return { error: "Invalid --pick value." };
-  }
-  return { value };
 }
 
 function parseOptionalIntOption(name: string, raw: string | undefined): { value?: number; error?: string } {

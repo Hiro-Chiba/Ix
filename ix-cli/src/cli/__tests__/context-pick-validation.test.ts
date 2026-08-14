@@ -36,7 +36,7 @@ describe("ix context --pick validation", () => {
 
     expect(result.error?.exitCode).toBe(1);
     expect(result.stderr).toContain("argument '" + pick + "' is invalid");
-    expect(result.stderr).toContain("must be an integer");
+    expect(result.stderr).toContain("must be a positive integer");
     expect(result.stderr).not.toContain("TypeError");
     expect(resolveFileOrEntity).not.toHaveBeenCalled();
   });

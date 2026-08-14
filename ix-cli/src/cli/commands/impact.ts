@@ -8,6 +8,7 @@ import { bucketByHierarchy, getSystemPath, formatSystemPath, hasMapData, type Sy
 import { inferRiskSemantics, humanizeLabel, type ImpactFacts, type RiskSemantics } from "../impact/risk-semantics.js";
 import { stripNulls } from "../format.js";
 import { llmLine, llmError } from "../llm.js";
+import { parsePickOption } from "../options.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "object", "trait", "interface"]);
 
@@ -16,7 +17,7 @@ export function registerImpactCommand(program: Command): void {
     .command("impact <target>")
     .description("System risk analysis — what behavior is at risk if this changes")
     .option("--kind <kind>", "Filter target entity by kind")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--depth <n>", "Expansion depth for callers/importers (default 1, max 3)", "1")
     .option("--limit <n>", "Max top-impacted members to show", "10")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
@@ -27,13 +28,13 @@ export function registerImpactCommand(program: Command): void {
     .action(
       async (
         symbol: string,
-        opts: { kind?: string; pick?: string; depth: string; limit: string; format: string }
+        opts: { kind?: string; pick?: number; depth: string; limit: string; format: string }
       ) => {
         const client = new IxClient(getEndpoint());
         const limit = parseInt(opts.limit, 10);
         const depth = Math.min(Math.max(parseInt(opts.depth, 10) || 1, 1), 3);
 
-        const resolveOpts = { kind: opts.kind, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+        const resolveOpts = { kind: opts.kind, pick: opts.pick };
         const target = await resolveFileOrEntity(client, symbol, resolveOpts);
         if (!target) {
           // The resolver already printed human guidance to stderr; for llm

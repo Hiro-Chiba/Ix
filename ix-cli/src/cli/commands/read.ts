@@ -9,6 +9,7 @@ import { stderr } from "../stderr.js";
 import { isFileStale } from "../stale.js";
 import { relativePath } from "../format.js";
 import { llmLine, printLlmLines } from "../llm.js";
+import { parsePickOption } from "../options.js";
 
 /** Common file extensions that signal the target is file-like, not a symbol name. */
 const FILE_EXTENSIONS = new Set([
@@ -193,7 +194,7 @@ export function registerReadCommand(program: Command): void {
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .option("--kind <kind>", "Filter symbol by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--root <dir>", "Workspace root directory")
     .addHelpText("after", `\nResolution order:
   1. Exact file path          ix read src/main.ts
@@ -209,7 +210,7 @@ Examples:
   ix read IngestionService
   ix read ingestFile --kind method
   ix read verify_token --path auth`)
-    .action(async (target: string, opts: { format: string; kind?: string; path?: string; pick?: string; root?: string }) => {
+    .action(async (target: string, opts: { format: string; kind?: string; path?: string; pick?: number; root?: string }) => {
       const root = resolveWorkspaceRoot(opts.root);
       const client = new IxClient(getEndpoint());
 
@@ -274,7 +275,7 @@ Examples:
       }
 
       // --- Step 4: Try unique symbol match ---
-      const symbolResult = await trySymbolMatch(client, rawTarget, { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined });
+      const symbolResult = await trySymbolMatch(client, rawTarget, { kind: opts.kind, path: opts.path, pick: opts.pick });
       if (symbolResult.type === "resolved") {
         const { node, sourceUri } = symbolResult;
         // sourceUri coming from the graph is workspace-relative under the

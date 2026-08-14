@@ -30,7 +30,8 @@ describe("resolver flag consistency across content commands", () => {
       });
 
       it("passes pick as number to resolver", () => {
-        expect(content).toContain("parseInt(opts.pick, 10)");
+        expect(content).toContain("parsePickOption");
+        expect(content).toContain("pick: opts.pick");
       });
     });
   }

@@ -3,9 +3,9 @@ import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, printResolved, isRawId } from "../resolve.js";
-import { stderr } from "../stderr.js";
 import { compactTreeNode, relativePath } from "../format.js";
 import { llmLine, llmError } from "../llm.js";
+import { parsePickOption } from "../options.js";
 
 // ── Tree types ──────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ export function registerDependsCommand(program: Command): void {
     .description("Show upstream dependents of the given entity (full tree by default)")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--depth <n>", "Cap traversal depth")
     .option("--cap <n>", "Cap number of nodes visited")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
@@ -204,22 +204,13 @@ export function registerDependsCommand(program: Command): void {
   ix depends AuthProvider --depth 2
   ix depends parser.py --kind file
   ix depends NodeKind --pick 1 --cap 500`)
-    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; depth?: string; cap?: string; format: string; includeTests?: boolean; testsOnly?: boolean }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; depth?: string; cap?: string; format: string; includeTests?: boolean; testsOnly?: boolean }) => {
       const client = new IxClient(getEndpoint());
-
-      // Validate --pick
-      if (opts.pick !== undefined) {
-        const pickVal = parseInt(opts.pick, 10);
-        if (isNaN(pickVal) || pickVal < 1) {
-          stderr(`Invalid value for --pick: must be a positive integer.`);
-          return;
-        }
-      }
 
       const resolveOpts = {
         kind: opts.kind,
         path: opts.path,
-        pick: opts.pick ? parseInt(opts.pick, 10) : undefined,
+        pick: opts.pick,
         includeTests: opts.includeTests,
         testsOnly: opts.testsOnly,
       };

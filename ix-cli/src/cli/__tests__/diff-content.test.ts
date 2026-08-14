@@ -202,8 +202,9 @@ describe("diff.ts resolver flags", () => {
     expect(diffContent).toContain("resolveFileOrEntity(client, target, resolveOpts)");
   });
 
-  it("converts --pick string to number", () => {
-    expect(diffContent).toContain("parseInt(opts.pick, 10)");
+  it("parses --pick as a positive integer", () => {
+    expect(diffContent).toContain("parsePickOption");
+    expect(diffContent).toContain("pick: opts.pick");
   });
 
   it("imports printResolved for text-mode output", () => {

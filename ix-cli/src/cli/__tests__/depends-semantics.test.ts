@@ -106,8 +106,7 @@ describe("depends nested tree structure", () => {
 
 describe("depends input validation", () => {
   it("validates --pick as positive integer", () => {
-    expect(dependsContent).toContain("Invalid value for --pick");
-    expect(dependsContent).toContain("must be a positive integer");
+    expect(dependsContent).toContain("parsePickOption");
   });
 
   it("supports --pick option", () => {

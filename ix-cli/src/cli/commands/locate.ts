@@ -9,6 +9,7 @@ import { isFileStale } from "../stale.js";
 import { stderr } from "../stderr.js";
 import { relativePath } from "../format.js";
 import { llmLine, llmError } from "../llm.js";
+import { parsePickOption } from "../options.js";
 import { getEffectiveSystemPath, hasMapData } from "../hierarchy.js";
 import { humanizeLabel } from "../impact/risk-semantics.js";
 import { renderSection, renderKeyValue, renderNote, renderWarning, renderBreadcrumb } from "../ui.js";
@@ -36,19 +37,19 @@ export function registerLocateCommand(program: Command): void {
     .description("Resolve a symbol to its position in the codebase and system hierarchy")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer results from files matching this path substring")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .addHelpText("after", `\nExamples:
   ix locate IngestionService
   ix locate verify_token --kind function
   ix locate ArangoClient --format json
   ix locate scoreCandidate --pick 2`)
-    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; format: string }) => {
       const client = new IxClient(getEndpoint());
       const diagnostics: string[] = [];
       const isJson = opts.format === "json";
 
-      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
 
       // Resolution with ambiguity detection
       const { target, ambiguous } = await resolveWithAmbiguity(client, symbol, resolveOpts, opts.format);

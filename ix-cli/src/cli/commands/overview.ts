@@ -6,6 +6,7 @@ import { getEffectiveSystemPath, getSystemPath, hasMapData } from "../hierarchy.
 import { humanizeLabel } from "../impact/risk-semantics.js";
 import { relativePath } from "../format.js";
 import { llmLine, llmError, type LlmValue } from "../llm.js";
+import { parsePickOption } from "../options.js";
 import { renderSection, renderKeyValue, renderNote, renderBreadcrumb } from "../ui.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
@@ -37,7 +38,7 @@ export function registerOverviewCommand(program: Command): void {
     .description("Structural summary — what a target contains or what surrounds it")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .addHelpText(
       "after",
@@ -52,9 +53,9 @@ Examples:
   ix overview overview.ts
   ix overview scoreCandidate --pick 2`
     )
-    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; format: string }) => {
       const client = new IxClient(getEndpoint());
-      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) {
         // Resolver printed human guidance to stderr; add a structured record for llm.

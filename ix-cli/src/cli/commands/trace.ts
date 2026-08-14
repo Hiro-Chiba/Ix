@@ -4,10 +4,10 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, isRawId, activeReadScope, ensureReadScope } from "../resolve.js";
 import type { ResolvedEntity } from "../resolve.js";
-import { stderr } from "../stderr.js";
 import { renderSection, renderKeyValue, renderResolvedHeader, colorizeKind } from "../ui.js";
 import { compactTreeNode, relativePath } from "../format.js";
 import { llmLine, llmError, type LlmValue } from "../llm.js";
+import { parsePickOption } from "../options.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -408,7 +408,7 @@ export function registerTraceCommand(program: Command): void {
     .option("--kind <kind>", "Relationship kind: calls|imports|depends|contains")
     .option("--depth <n>", "Cap traversal depth")
     .option("--cap <n>", "Cap number of nodes visited, per direction")
-    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--path <path>", "Prefer symbols from files matching this path substring")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .option("--include-tests", "Include test and fixture entities")
@@ -433,7 +433,7 @@ export function registerTraceCommand(program: Command): void {
           kind?: string;
           depth?: string;
           cap?: string;
-          pick?: string;
+          pick?: number;
           path?: string;
           format: string;
           includeTests?: boolean;
@@ -442,18 +442,9 @@ export function registerTraceCommand(program: Command): void {
       ) => {
         const client = new IxClient(getEndpoint());
 
-        // Validate --pick
-        if (opts.pick !== undefined) {
-          const pickVal = parseInt(opts.pick, 10);
-          if (isNaN(pickVal) || pickVal < 1) {
-            stderr("Invalid value for --pick: must be a positive integer.");
-            return;
-          }
-        }
-
         const resolveOpts = {
           path: opts.path,
-          pick: opts.pick ? parseInt(opts.pick, 10) : undefined,
+          pick: opts.pick,
           includeTests: opts.includeTests,
           testsOnly: opts.testsOnly,
         };
@@ -566,7 +557,7 @@ export function registerTraceCommand(program: Command): void {
         target = await pickTraceTarget(client, symbol, target, {
           direction,
           predicates,
-          pick: opts.pick ? parseInt(opts.pick, 10) : undefined,
+          pick: opts.pick,
           path: opts.path,
         });
 
