@@ -129,7 +129,7 @@ const TOOL_ANNOTATIONS: Record<(typeof IX_MCP_TOOL_NAMES)[number], ToolAnnotatio
   ix_explain: { ...READ_ONLY, title: "Explain a symbol using graph evidence" },
   ix_rank: { ...READ_ONLY, title: "Rank graph entities by importance" },
   ix_inventory: { ...READ_ONLY, title: "List graph entities by kind" },
-  ix_smells: { ...READ_ONLY, title: "Detect graph-backed architecture smells" },
+  ix_smells: { ...WRITE, title: "Detect graph-backed architecture smells" },
   ix_stats: { ...READ_ONLY, title: "Return graph-wide statistics" },
   ix_subsystems: { ...READ_ONLY, title: "List graph-derived subsystems" },
   ix_history: { ...READ_ONLY, title: "Show provenance and patch history" },

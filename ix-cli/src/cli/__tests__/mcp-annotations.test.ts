@@ -41,16 +41,24 @@ describe("ix mcp tool annotations", () => {
   });
 
   it("marks mutating tools destructive, non-idempotent, and non-read-only", async () => {
-    const client = await connect(async () => ({ ok: true, stdout: "ok", stderr: "" }), true);
+    const calls: string[][] = [];
+    const client = await connect(async (args) => {
+      calls.push(args);
+      return { ok: true, stdout: "{}", stderr: "" };
+    }, true);
     const byName = new Map((await client.listTools()).tools.map((entry) => [entry.name, entry]));
 
     // ix_decide is deliberately absent: it lives in @ix/pro, so its behavior
     // cannot be verified from here. See the Pro-tool case below.
-    for (const name of ["ix_map", "ix_ingest"]) {
+    for (const name of ["ix_map", "ix_smells", "ix_ingest"]) {
       expect(byName.get(name)?.annotations?.destructiveHint, name).toBe(true);
       expect(byName.get(name)?.annotations?.readOnlyHint, name).toBe(false);
       expect(byName.get(name)?.annotations?.idempotentHint, name).toBe(false);
     }
+
+    await client.callTool({ name: "ix_smells", arguments: {} });
+    expect(calls).toEqual([["smells", "--format=json"]]);
+    expect(calls[0]).not.toContain("--list");
   });
 
   it("asserts no behavioral hint for tools implemented outside this repository", async () => {
@@ -97,8 +105,9 @@ describe("ix mcp tool annotations", () => {
 
     // ix_ingest is the one tool that reaches outside the host (GitHub API).
     expect(byName.get("ix_ingest")?.annotations?.openWorldHint).toBe(true);
-    // Local graph reads and the local map refresh do not.
+    // Local graph reads, smell detection, and the local map refresh do not.
     expect(byName.get("ix_map")?.annotations?.openWorldHint).toBe(false);
+    expect(byName.get("ix_smells")?.annotations?.openWorldHint).toBe(false);
     expect(byName.get("ix_text")?.annotations?.openWorldHint).toBe(false);
   });
 

@@ -60,8 +60,9 @@ gemini, openclaw and opencode lose only `ix_query` and the two composites.
 - **Tool annotations.** Every advertised tool carries a `title`, and every tool
   implemented in this repository also carries `readOnlyHint`, `destructiveHint`,
   `idempotentHint` and `openWorldHint` so a client can present and route it
-  correctly. Graph reads are read-only and idempotent; `ix_map` and `ix_ingest`
-  are destructive because they mutate backend state; only `ix_ingest` is
+  correctly. Graph reads are read-only and idempotent; `ix_map`, `ix_ingest`,
+  and `ix_smells` in its default mode, which stores versioned claims, are
+  destructive because they mutate backend state; only `ix_ingest` is
   open-world, because its GitHub form reaches an external API.
 
   The Pro tools — `ix_briefing`, `ix_decisions`, `ix_decide` — carry a title and
