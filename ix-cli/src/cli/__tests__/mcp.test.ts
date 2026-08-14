@@ -280,9 +280,40 @@ describe("ix mcp", () => {
       return { ok: true, stdout: "{}", stderr: "" };
     });
 
-    await client.callTool({ name: "ix_ingest", arguments: { github: "owner/repo", limit: 25 } });
+    await client.callTool({
+      name: "ix_ingest",
+      arguments: { github: "owner/repo", since: "2026-01-01", limit: 25 },
+    });
 
-    expect(calls).toEqual([["ingest", "--github=owner/repo", "--limit=25", "--format=json"]]);
+    expect(calls).toEqual([
+      ["ingest", "--github=owner/repo", "--since=2026-01-01", "--limit=25", "--format=json"],
+    ]);
+  });
+
+  it("rejects simultaneous ix_ingest path and github sources before running the CLI", async () => {
+    const calls: string[][] = [];
+    const client = await connect(async (args) => {
+      calls.push(args);
+      return { ok: true, stdout: "{}", stderr: "" };
+    });
+
+    const result = (await client.callTool({
+      name: "ix_ingest",
+      arguments: { path: "src", github: "owner/repo" },
+    })) as CallToolResult;
+
+    expect(calls).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({
+          error: "path and github are mutually exclusive; provide only one",
+          tool: "ix_ingest",
+        }),
+      },
+    ]);
   });
 
   it("does not pass --limit when ingesting a local path", async () => {

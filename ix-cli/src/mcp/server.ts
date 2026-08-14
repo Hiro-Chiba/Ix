@@ -439,6 +439,12 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       since: z.string().min(1).optional().describe("ISO 8601 date"),
     },
     async (input) => {
+      if (typeof input.path === "string" && typeof input.github === "string") {
+        return textResult(
+          JSON.stringify({ error: "path and github are mutually exclusive; provide only one", tool: "ix_ingest" }),
+          true,
+        );
+      }
       const options: string[] = [];
       pushOption(options, "--github", input.github);
       pushOption(options, "--since", input.since);
