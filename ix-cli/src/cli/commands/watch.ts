@@ -23,6 +23,22 @@ const IGNORE_DIRS = new Set([
 const DEBOUNCE_MS = 300;
 const MAP_COALESCED_EXIT_CODE = 75;
 const MAP_RETRY_MS = 1000;
+const MAP_RETRY_MAX_MS = 30_000;
+/**
+ * How many times a coalesced map is retried before the refresh is given up on.
+ *
+ * The backoff below reaches its 30s ceiling after five doublings (31s of
+ * waiting), so 45 attempts spans roughly 21 minutes. That is deliberately just
+ * past `DEFAULT_LOCK_MAX_MS` in single-flight.ts (20 min), which is the point at
+ * which a lock whose holder died is stolen — so a genuinely long map is still
+ * waited out, and only a lock that outlives its own staleness window gives up.
+ *
+ * A fixed 1s retry with no ceiling reached that same 20 minutes in ~1,200 Node
+ * process spawns. This reaches it in 45.
+ */
+const MAP_RETRY_ATTEMPTS = 45;
+/** Retrying silently for minutes looks identical to a watcher that has died. */
+const MAP_RETRY_NOTIFY_AFTER = 3;
 
 interface MapChild {
   once(event: "error", listener: (err: Error) => void): unknown;
@@ -103,17 +119,31 @@ function runChild(
   });
 }
 
+/** Exponential backoff, capped, so a held lock costs attempts rather than spawns. */
+export function mapRetryDelay(attempt: number): number {
+  return Math.min(MAP_RETRY_MS * 2 ** (attempt - 1), MAP_RETRY_MAX_MS);
+}
+
 export async function runCanonicalMap(
   root: string,
   launch: MapLauncher = spawn as MapLauncher,
   wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  notify: (message: string) => void = message => console.error(`${chalk.dim("[watch]")} ${message}`),
 ): Promise<void> {
   const invocation = canonicalMapInvocation(root);
-  for (;;) {
+  for (let attempt = 1; attempt <= MAP_RETRY_ATTEMPTS; attempt++) {
     const { code } = await runChild(invocation, launch);
     if (code === 0) return;
-    await wait(MAP_RETRY_MS);
+    // Exit 75 means another ix map holds the workspace lock. The child runs
+    // --silent, so without this the watcher looks hung rather than patient.
+    if (attempt === MAP_RETRY_NOTIFY_AFTER) {
+      notify("another ix map holds this workspace; waiting for it to finish...");
+    }
+    await wait(mapRetryDelay(attempt));
   }
+  throw new Error(
+    `ix map stayed coalesced across ${MAP_RETRY_ATTEMPTS} attempts; another ix map has held the workspace lock the whole time`,
+  );
 }
 
 /** Serialize refreshes and coalesce changes during a run into one trailing refresh. */

@@ -8,6 +8,7 @@ import {
   WatchRefreshScheduler,
   canonicalMapInvocation,
   childCliArgs,
+  mapRetryDelay,
   prepareMigratedWorkspaceRefresh,
   runCanonicalMap,
   shouldWatch,
@@ -185,6 +186,47 @@ describe("canonical watch refresh", () => {
       "ix map failed (exit 2)",
     );
     expect(launch).toHaveBeenCalledOnce();
+  });
+
+  it("gives up on a lock that is never released instead of retrying forever", async () => {
+    // A holder that never exits 0 — a crashed process whose lockfile outlived
+    // it. Unbounded, this spawned a Node process every second indefinitely.
+    const launch = vi.fn(() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 75, null));
+      return child as any;
+    });
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(runCanonicalMap("/workspace/project", launch, wait, () => {})).rejects.toThrow(
+      /stayed coalesced across \d+ attempts/,
+    );
+    expect(launch.mock.calls.length).toBeLessThanOrEqual(45);
+    expect(wait).toHaveBeenCalledTimes(launch.mock.calls.length);
+  });
+
+  it("tells the user why it is waiting, since the child map runs --silent", async () => {
+    const exits = [75, 75, 75, 0];
+    const launch = vi.fn(() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", exits.shift(), null));
+      return child as any;
+    });
+    const notify = vi.fn();
+
+    await runCanonicalMap("/workspace/project", launch, vi.fn().mockResolvedValue(undefined), notify);
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify.mock.calls[0]![0]).toMatch(/another ix map holds this workspace/);
+  });
+
+  it("backs off exponentially up to a ceiling", () => {
+    expect([1, 2, 3, 4, 5, 6].map(mapRetryDelay)).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+    // Capped, so a long wait costs attempts rather than unbounded sleep growth.
+    expect(mapRetryDelay(45)).toBe(30000);
+    // 45 attempts spans past single-flight's 20-minute stale-lock window.
+    const total = Array.from({ length: 45 }, (_, i) => mapRetryDelay(i + 1)).reduce((a, b) => a + b, 0);
+    expect(total).toBeGreaterThan(20 * 60 * 1000);
   });
 
   it("keeps delete events eligible without requiring the file to exist", () => {
