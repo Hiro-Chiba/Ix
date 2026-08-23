@@ -13,7 +13,6 @@ import { IxClient } from "../../client/api.js";
 import type {
   ConflictReport,
   DecisionReport,
-  GraphNode,
   IntentReport,
   StructuredContext,
 } from "../../client/types.js";
@@ -120,6 +119,37 @@ interface ContextOptions extends Partial<BudgetSnapshot> {
   format: string;
 }
 
+const CONTEXT_DEPTHS = ["compact", "standard", "full", "shallow", "deep"] as const;
+
+/**
+ * The depth vocabulary the backend understands, and what to do about anything
+ * else.
+ *
+ * `ContextService` normalizes `shallow`->`compact` and `deep`->`full`, then
+ * picks its limits with a `case _` that lands every unrecognized value on the
+ * `standard` tier. So `--depth 2` was never an error: it silently ran a
+ * standard-depth query, and scripts have been passing values like it.
+ *
+ * Rejecting those outright would be a breaking change in a patch release, for
+ * a flag whose wrong values were previously harmless. So this warns and does
+ * exactly what the backend already did with them — the typo still gets
+ * surfaced, on stderr so `--format json` and `--format llm` stay parseable,
+ * but nobody's pipeline starts exiting 1 on upgrade.
+ *
+ * Deliberately not an `InvalidArgumentError`, unlike `--pick` and `--as-of-rev`
+ * next to it: those reject values that have no defined meaning, whereas this
+ * one has a defined meaning and it is `standard`.
+ */
+export function parseContextDepthOption(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if ((CONTEXT_DEPTHS as readonly string[]).includes(normalized)) return normalized;
+
+  renderWarningErr(
+    `--depth ${value} is not one of ${CONTEXT_DEPTHS.join(", ")}; using standard.`
+  );
+  return "standard";
+}
+
 /** Stable evidence kinds, ordered by relevance tier (lower is more relevant). */
 type EvidenceKind =
   | "target"
@@ -197,7 +227,11 @@ export function registerContextCommand(program: Command): void {
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
-    .option("--depth <depth>", "Context-graph expansion depth")
+    .option(
+      "--depth <depth>",
+      `Context-graph expansion depth (${CONTEXT_DEPTHS.join("|")})`,
+      parseContextDepthOption,
+    )
     .option("--as-of-rev <n>", "Historical context as of a graph revision", parseRevisionOption)
     // No Commander default on the --max-* flags, so `parseRequestedBudgets`
     // can tell an absent flag from one set to the default value. The defaults
@@ -526,11 +560,12 @@ function investigationPath(id: string): string {
  * Encode an investigation id into a filesystem-safe file name, injectively.
  *
  * `[A-Za-z0-9._-]` passes through unchanged; every other UTF-16 code unit —
- * including the escape marker `~` itself — is hex-encoded as `~HH`. Two
- * different logical ids can therefore never map to the same file, and a raw
- * `~` in user input cannot be confused with an encoding: `a/b`, `a?b`, and
- * `a~2Fb` all land in distinct, single-segment files under the investigation
- * directory instead of silently colliding or escaping it.
+ * including the escape marker `~` itself — is hex-encoded, as `~HH` below
+ * U+0100 and `~uHHHH` at or above it. Two different logical ids can therefore
+ * never map to the same file, and a raw `~` in user input cannot be confused
+ * with an encoding: `a/b`, `a?b`, and `a~2Fb` all land in distinct,
+ * single-segment files under the investigation directory instead of silently
+ * colliding or escaping it.
  *
  * A leading `.` is encoded too, so no id can produce a dotfile. `.` is otherwise
  * an ordinary character here, and encoding it only in first position keeps the
@@ -538,8 +573,32 @@ function investigationPath(id: string): string {
  */
 export function sanitizeId(id: string): string {
   let out = "";
-  for (const ch of id) {
-    out += /[A-Za-z0-9._-]/.test(ch) ? ch : `~${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+  // Iterate UTF-16 code units, not code points. `for...of` walks code points
+  // while `charCodeAt(0)` reads only the leading surrogate, so every astral
+  // character encoded as just its high surrogate and they all collided (#478).
+  for (let i = 0; i < id.length; i++) {
+    const ch = id[i];
+    if (/[A-Za-z0-9._-]/.test(ch)) {
+      out += ch;
+      continue;
+    }
+    const code = id.charCodeAt(i);
+    // Two escape widths, and the `u` is what keeps them apart. A bare
+    // `~HHHH` would be ambiguous: `~D83D` reads equally well as one code unit
+    // or as `~D8` followed by the literal characters `3D`, and hex digits pass
+    // through unencoded, so both readings are producible. That is not
+    // hypothetical — it is how U+1F600 collided with the ordinary string
+    // `Ø3DÞ00`, which is the same overwrite bug #478 was about, one layer down.
+    //
+    // `u` cannot be confused with the narrow form because it is not a hex
+    // digit, and a literal `~` in the input is itself encoded (`~7E`), so the
+    // character after an escape marker is never user data.
+    //
+    // The narrow form is kept for everything below U+0100 so that every id
+    // already on disk keeps the name it was saved under.
+    out += code < 0x100
+      ? `~${code.toString(16).toUpperCase().padStart(2, "0")}`
+      : `~u${code.toString(16).toUpperCase().padStart(4, "0")}`;
   }
   if (out.startsWith(".")) out = `~2E${out.slice(1)}`;
   return out || "unnamed";
@@ -555,18 +614,19 @@ export function sanitizeId(id: string): string {
  * saved as `widget/auth` was listed as `widget~2Fauth`, and resuming that
  * looked for `widget~7E2Fauth`, which does not exist.
  *
- * The escape is not fixed-width, and that is why this decodes and then
- * re-encodes rather than trusting the decode. `toString(16)` gives two hex
- * digits below U+0100 and three or four above it, so `~7528` is either one CJK
- * code unit or `~752` followed by a literal `8`, and nothing in the string says
- * which. Two hex digits is the case every Latin-1 id takes; anything else fails
- * the re-encode and the stored id is returned untouched, which is honest rather
- * than a guess. `loadInvestigation` accepts that form too, so a listed id loads
- * either way — the display is the nicety, the load is the contract.
+ * Decodes both escape widths and then re-encodes to check itself, rather than
+ * trusting the decode. The check is not ceremony: ids written before the
+ * `~uHHHH` form existed still carry bare `~HHHH`, which decodes to a different
+ * string than it was saved from, and the re-encode is what catches that and
+ * returns the stored id untouched instead of showing a plausible wrong answer.
+ * `loadInvestigation` accepts the stored form too, so a listed id loads either
+ * way — the display is the nicety, the load is the contract.
  */
 export function displayId(stored: string): string {
-  const decoded = stored.replace(/~([0-9A-Fa-f]{2})/g, (_m, hex: string) =>
-    String.fromCharCode(parseInt(hex, 16)),
+  const decoded = stored.replace(
+    /~u([0-9A-Fa-f]{4})|~([0-9A-Fa-f]{2})/g,
+    (_m, wide: string | undefined, narrow: string | undefined) =>
+      String.fromCharCode(parseInt(wide ?? narrow ?? "", 16)),
   );
   return sanitizeId(decoded) === stored ? decoded : stored;
 }
@@ -1289,20 +1349,37 @@ export function buildBundle(input: BuildInput): ContextBundle {
       stale,
     },
   ];
-  for (const node of orderedNodes(context.nodes)) {
+  // Compact and standard backend responses omit the full graph arrays and
+  // carry the same graph as summaries. Falling back here keeps the default
+  // context mode from collapsing to a target-only bundle.
+  const contextNodes = context.nodes.length > 0
+    ? context.nodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        kind: node.kind,
+        path: node.provenance?.sourceUri,
+      }))
+    : (context.nodeSummaries ?? []).map((node) => ({
+        id: node.id,
+        name: node.name,
+        kind: node.kind,
+        path: node.sourceUri ?? undefined,
+      }));
+  for (const node of orderedNodes(contextNodes)) {
     if (seen.has(node.id)) continue;
     seen.add(node.id);
     entities.push({
       id: node.id,
       name: node.name,
       kind: node.kind,
-      path: node.provenance?.sourceUri,
+      path: node.path,
       stale: false, // replaced below, for the entities that survive the budget
     });
   }
 
   // Relationships: graph edges, ordered deterministically.
-  const relationships = [...context.edges]
+  const contextEdges = context.edges.length > 0 ? context.edges : (context.edgeSummaries ?? []);
+  const relationships = [...contextEdges]
     .sort((a, b) => cmp(a.src, b.src) || cmp(a.dst, b.dst) || cmp(a.predicate, b.predicate))
     .map((edge) => ({ src: edge.src, dst: edge.dst, predicate: edge.predicate }));
 
@@ -1590,7 +1667,7 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
   console.log();
 }
 
-function orderedNodes(nodes: GraphNode[]): GraphNode[] {
+function orderedNodes<T extends { id: string; kind: string; name: string }>(nodes: T[]): T[] {
   return [...nodes].sort((a, b) => cmp(a.kind, b.kind) || cmp(a.name, b.name) || cmp(a.id, b.id));
 }
 
