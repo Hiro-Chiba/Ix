@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { ingestMtimeCachePath, saveConfig } from "../config.js";
 import { loadIngestBaseline } from "../ingest-baseline.js";
 import { persistIngestBaselineIfClean } from "../commands/ingest.js";
-import { detectStaleFiles, isFileStale } from "../stale.js";
+import { createStaleProbe, detectStaleFiles, isFileStale } from "../stale.js";
 
 let home: string;
 let savedHome: string | undefined;
@@ -108,7 +108,19 @@ describe("workspace-scoped staleness", () => {
 
   it("returns the unmapped state when the workspace has no baseline", async () => {
     const root = path.join(home, "unmapped");
-    writeSource(root, "new.js", "export const value = 1;\n");
+    const filePath = writeSource(root, "new.js", "export const value = 1;\n");
+    saveConfig({
+      endpoint: "http://localhost:8090",
+      format: "text",
+      workspaces: [
+        {
+          workspace_id: "unmapped0001",
+          workspace_name: "unmapped",
+          root_path: root,
+          default: true,
+        },
+      ],
+    });
 
     expect(detectStaleFiles(root)).toEqual({
       mapCompleted: false,
@@ -117,6 +129,8 @@ describe("workspace-scoped staleness", () => {
       staleFiles: 0,
       sampleChangedFiles: [],
     });
+    expect(isFileStale(filePath)).toBe(true);
+    expect(createStaleProbe()(filePath)).toBe(true);
   });
 
   it("reports a mapped file that was deleted after ingest", async () => {

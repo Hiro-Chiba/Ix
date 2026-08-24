@@ -161,7 +161,10 @@ export function createStaleProbe(): (filePath: string) => boolean {
   const baseline = loadIngestBaseline(workspaceRoot);
 
   return (filePath: string): boolean => {
-    if (!baseline) return false;
+    // A baseline is written only after a map completes successfully. The
+    // backend can already contain partial commits when an initial map fails,
+    // so absence means its results are unverified rather than current.
+    if (!baseline) return true;
 
     const absolutePath = path.isAbsolute(filePath)
       ? path.resolve(filePath)
