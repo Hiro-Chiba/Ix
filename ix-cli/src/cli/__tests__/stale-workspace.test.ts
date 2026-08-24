@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { ingestMtimeCachePath, saveConfig } from "../config.js";
+import { clearIngestMtimeCache, ingestMtimeCachePath, saveConfig } from "../config.js";
 import { loadIngestBaseline } from "../ingest-baseline.js";
 import { persistIngestBaselineIfClean } from "../commands/ingest.js";
 import { detectStaleFiles, isFileStale } from "../stale.js";
@@ -110,6 +110,31 @@ describe("workspace-scoped staleness", () => {
     const root = path.join(home, "unmapped");
     writeSource(root, "new.js", "export const value = 1;\n");
 
+    expect(detectStaleFiles(root)).toEqual({
+      mapCompleted: false,
+      lastIngestAt: null,
+      currentRev: 0,
+      staleFiles: 0,
+      sampleChangedFiles: [],
+    });
+  });
+
+  it("returns the unmapped state after an empty completed map invalidates a prior baseline", () => {
+    const root = path.join(home, "empty-completed-map");
+    const filePath = writeSource(root, "index.php", "<?php function value() { return 1; }\n");
+    persistIngestBaselineIfClean(
+      root,
+      new Map([[filePath, fs.statSync(filePath).mtimeMs]]),
+      26,
+      0,
+      0,
+      new Date("2026-08-24T12:00:00.000Z"),
+    );
+    expect(detectStaleFiles(root).mapCompleted).toBe(true);
+
+    clearIngestMtimeCache(root);
+
+    expect(loadIngestBaseline(root)).toBeNull();
     expect(detectStaleFiles(root)).toEqual({
       mapCompleted: false,
       lastIngestAt: null,

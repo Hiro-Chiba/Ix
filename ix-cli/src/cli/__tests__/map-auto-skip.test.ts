@@ -6,6 +6,8 @@ import { Command } from 'commander';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyRequestedMapCoalesceExitCode,
+  describeEmptyCompletedMap,
+  invalidateBaselineForEmptyCompletedMap,
   mapModeForIngest,
   registerMapCommand,
   requestedMapCoalesceExitCode,
@@ -91,5 +93,95 @@ describe('mapModeForIngest', () => {
 
   it('lets watch request full canonical patches after the map lock is acquired', () => {
     expect(mapModeForIngest('1')).toBe(false);
+  });
+});
+
+describe('describeEmptyCompletedMap', () => {
+  const emptyResult = {
+    file_count: 0,
+    region_count: 0,
+    regions: [],
+    outcome: 'full_local_completed',
+  };
+
+  it('rejects a completed empty map after a clean ingest committed source patches', () => {
+    const message = describeEmptyCompletedMap(emptyResult, {
+      filesDiscovered: 260,
+      patchesApplied: 260,
+      parseErrors: 0,
+      commitErrors: 0,
+    });
+
+    expect(message).toContain('mapped 0 files after local ingest found 260 supported source files');
+    expect(message).toContain('(260 patches committed)');
+    expect(message).toContain('no architecture hierarchy was created');
+  });
+
+  it('does not reject an actually empty workspace', () => {
+    expect(describeEmptyCompletedMap(emptyResult, {
+      filesDiscovered: 0,
+      patchesApplied: 0,
+      parseErrors: 0,
+      commitErrors: 0,
+    })).toBeUndefined();
+  });
+
+  it('does not mask an ingest failure with a map-language diagnosis', () => {
+    expect(describeEmptyCompletedMap(emptyResult, {
+      filesDiscovered: 12,
+      patchesApplied: 12,
+      parseErrors: 1,
+      commitErrors: 0,
+    })).toBeUndefined();
+    expect(describeEmptyCompletedMap(emptyResult, {
+      filesDiscovered: 12,
+      patchesApplied: 12,
+      parseErrors: 0,
+      commitErrors: 1,
+    })).toBeUndefined();
+  });
+
+  it('requires both an explicitly completed outcome and an entirely empty response', () => {
+    expect(describeEmptyCompletedMap({ ...emptyResult, outcome: 'local_map_not_recommended' }, {
+      filesDiscovered: 12,
+      patchesApplied: 12,
+      parseErrors: 0,
+      commitErrors: 0,
+    })).toBeUndefined();
+    expect(describeEmptyCompletedMap({ ...emptyResult, file_count: 12 }, {
+      filesDiscovered: 12,
+      patchesApplied: 12,
+      parseErrors: 0,
+      commitErrors: 0,
+    })).toBeUndefined();
+    expect(describeEmptyCompletedMap({ ...emptyResult, region_count: 1 }, {
+      filesDiscovered: 12,
+      patchesApplied: 12,
+      parseErrors: 0,
+      commitErrors: 0,
+    })).toBeUndefined();
+  });
+
+  it('invalidates the current workspace baseline, including on an unchanged retry', () => {
+    const invalidate = vi.fn();
+    const message = invalidateBaselineForEmptyCompletedMap(emptyResult, {
+      filesDiscovered: 260,
+      patchesApplied: 0,
+      parseErrors: 0,
+      commitErrors: 0,
+    }, '/workspace/account', invalidate);
+
+    expect(message).toContain('(0 patches committed)');
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledWith('/workspace/account');
+  });
+
+  it('rejects an empty cached map when coupling is reported unchanged', () => {
+    expect(describeEmptyCompletedMap({ ...emptyResult, outcome: 'coupling_unchanged' }, {
+      filesDiscovered: 260,
+      patchesApplied: 0,
+      parseErrors: 0,
+      commitErrors: 0,
+    })).toBeDefined();
   });
 });

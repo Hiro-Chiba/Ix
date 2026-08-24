@@ -2,12 +2,12 @@ import { resolve } from "node:path";
 import { type Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
-import { getEndpoint } from "../config.js";
+import { clearIngestMtimeCache, getEndpoint } from "../config.js";
 import { roundFloat } from "../format.js";
 import { llmLine, llmError } from "../llm.js";
 import { bootstrap, resolveWorkspaceId } from "../bootstrap.js";
 import { formatFetchError } from "../errors.js";
-import { ingestFiles } from "./ingest.js";
+import { ingestFiles, type IngestFilesSummary } from "./ingest.js";
 import { detectSystem } from "../system.js";
 import { getRemoteRunner, isCloudReady } from "../remote.js";
 import { acquireMapLock } from "../single-flight.js";
@@ -119,6 +119,52 @@ export interface MapResult {
   outcome?: string;
   preflight?: MapPreflight;
   persistence?: MapPersistence;
+}
+
+const COMPLETED_MAP_OUTCOMES = new Set([
+  "ok",
+  "full_local_completed",
+  "fast_local_completed",
+  "incremental_completed",
+  "coupling_unchanged",
+]);
+
+/**
+ * A completed map cannot legitimately contain no files immediately after a
+ * clean ingest found supported source files. Treat that contradiction as a
+ * failure instead of telling hooks and agents that an empty hierarchy is
+ * current.
+ */
+export function describeEmptyCompletedMap(
+  result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
+  ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
+): string | undefined {
+  if (!ingest || ingest.filesDiscovered <= 0 || ingest.parseErrors > 0 || ingest.commitErrors > 0) {
+    return undefined;
+  }
+  if (!result.outcome || !COMPLETED_MAP_OUTCOMES.has(result.outcome)) return undefined;
+  if (result.file_count !== 0 || result.region_count !== 0 || result.regions.length !== 0) return undefined;
+
+  const sourceFiles = ingest.filesDiscovered;
+  const patches = ingest.patchesApplied;
+  return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${sourceFiles} supported source ${sourceFiles === 1 ? "file" : "files"} (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but no architecture hierarchy was created. The active backend may not map this source language yet.`;
+}
+
+/**
+ * An empty completed map invalidates the local completion baseline. Keeping it
+ * would make `ix status` report mapCompleted=true for a hierarchy that does not
+ * exist. The next run may hash-skip unchanged files, so detection is based on
+ * discovered supported sources rather than only newly committed patches.
+ */
+export function invalidateBaselineForEmptyCompletedMap(
+  result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
+  ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
+  projectRoot: string,
+  invalidate: (root: string) => void = clearIngestMtimeCache,
+): string | undefined {
+  const message = describeEmptyCompletedMap(result, ingest);
+  if (message) invalidate(projectRoot);
+  return message;
 }
 
 type MapSortMode = "importance" | "confidence" | "size" | "alpha";
@@ -254,6 +300,7 @@ Examples:
       // The local backend bootstrap below only runs on the local path —
       // cloud ingestion doesn't require a local Ix backend.
       const ingestStart = performance.now();
+      let localIngest: IngestFilesSummary | undefined;
       if (cloudReady) {
         const runner = getRemoteRunner()!; // isCloudReady guarantees non-null
         try {
@@ -276,7 +323,7 @@ Examples:
           return;
         }
         try {
-          await ingestFiles(cwd, {
+          localIngest = await ingestFiles(cwd, {
             recursive: true,
             format: (machineFormat || silent) ? "json" : "text",
             printSummary: false,
@@ -337,6 +384,13 @@ Examples:
       }
       if (mapInterval) { clearInterval(mapInterval); process.stderr.write('\r' + ' '.repeat(60) + '\r'); }
       const mapMs = Math.round(performance.now() - mapStart);
+
+      const emptyMapError = invalidateBaselineForEmptyCompletedMap(result, localIngest, cwd);
+      if (emptyMapError) {
+        emitError(emptyMapError);
+        process.exitCode = 1;
+        return;
+      }
 
       if (silent) {
         const systems    = result.regions.filter(r => r.label_kind === "system").length;

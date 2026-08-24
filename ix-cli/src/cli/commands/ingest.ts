@@ -703,6 +703,14 @@ export type CommitOutcome =
   | { kind: "warn"; message: string }
   | { kind: "fatal"; message: string };
 
+/** Minimal local-ingest facts needed by commands that continue after ingestion. */
+export interface IngestFilesSummary {
+  filesDiscovered: number;
+  patchesApplied: number;
+  parseErrors: number;
+  commitErrors: number;
+}
+
 /**
  * Decide how loudly a run should complain about patches that failed to commit.
  *
@@ -794,7 +802,7 @@ export function ingestCompletedCleanly(parseErrors: number, commitErrors: number
 export async function ingestFiles(
   path: string,
   opts: { recursive?: boolean; force?: boolean; format: string; root?: string; debug?: boolean; printSummary?: boolean; suppressOutput?: boolean; lang?: string; mapMode?: boolean; deadlineSignal?: AbortSignal }
-): Promise<void> {
+): Promise<IngestFilesSummary> {
   const debug = opts.debug || process.env.IX_DEBUG === '1';
   const mapMode = opts.mapMode === true;
   const trueStart = performance.now();
@@ -2059,6 +2067,12 @@ export async function ingestFiles(
     opts.mapMode === true ? "--verbose" : "--debug",
     opts.deadlineSignal?.aborted === true
   );
+  const summary: IngestFilesSummary = {
+    filesDiscovered,
+    patchesApplied,
+    parseErrors,
+    commitErrors,
+  };
   if (commitReport.kind === "warn") {
     process.stderr.write(`  ${commitReport.message}\n`);
     // Non-zero even though we do not throw. A partial failure still means the
@@ -2072,7 +2086,7 @@ export async function ingestFiles(
 
   if (opts.suppressOutput === true) {
     if (commitReport.kind === "fatal") throw new Error(commitReport.message);
-    return;
+    return summary;
   }
 
   if (opts.format === 'json') {
@@ -2173,6 +2187,7 @@ export async function ingestFiles(
   // where main emitted a valid document carrying patchesApplied: 0. The
   // suppressOutput path above throws earlier because it has no report to emit.
   if (commitReport.kind === "fatal") throw new Error(commitReport.message);
+  return summary;
 }
 
 // ---------------------------------------------------------------------------
