@@ -115,6 +115,7 @@ describe('describeEmptyCompletedMap', () => {
     expect(message).toContain('mapped 0 files after local ingest found 260 supported source files');
     expect(message).toContain('(260 patches committed)');
     expect(message).toContain('no architecture hierarchy was created');
+    expect(message).toContain("the next 'ix map' re-parses every file");
   });
 
   it('does not reject an actually empty workspace', () => {
@@ -139,6 +140,28 @@ describe('describeEmptyCompletedMap', () => {
       parseErrors: 0,
       commitErrors: 1,
     })).toBeUndefined();
+  });
+
+  it('ignores an outcome the backend does not actually send', () => {
+    // 'ok' was in the completed set but is not one of the six MapOutcome
+    // labels, so it only ever looked like coverage.
+    expect(describeEmptyCompletedMap({ ...emptyResult, outcome: 'ok' }, {
+      filesDiscovered: 260,
+      patchesApplied: 260,
+      parseErrors: 0,
+      commitErrors: 0,
+    })).toBeUndefined();
+  });
+
+  it('leaves guardrail refusals alone, which carry no regions by design', () => {
+    for (const outcome of ['local_map_too_large', 'local_map_not_recommended']) {
+      expect(describeEmptyCompletedMap({ ...emptyResult, outcome }, {
+        filesDiscovered: 260,
+        patchesApplied: 260,
+        parseErrors: 0,
+        commitErrors: 0,
+      })).toBeUndefined();
+    }
   });
 
   it('requires both an explicitly completed outcome and an entirely empty response', () => {

@@ -121,8 +121,20 @@ export interface MapResult {
   persistence?: MapPersistence;
 }
 
+/**
+ * The backend's MapOutcome labels that mean "a map was produced" (MapTypes.scala).
+ *
+ * The other two it can send — `local_map_too_large` and `local_map_not_recommended`
+ * — are guardrail refusals that legitimately carry no regions, so they are left
+ * out: an empty response is the expected shape there, not a contradiction.
+ *
+ * `coupling_unchanged` belongs in this set even though it sounds like a skip.
+ * The backend answers it with the cached map from the last build's revision
+ * (`map.copy(outcome = CouplingUnchanged)`), not an empty delta — so an empty
+ * one is a real empty hierarchy being served from cache, which is exactly the
+ * state worth catching on a retry.
+ */
 const COMPLETED_MAP_OUTCOMES = new Set([
-  "ok",
   "full_local_completed",
   "fast_local_completed",
   "incremental_completed",
@@ -147,7 +159,7 @@ export function describeEmptyCompletedMap(
 
   const sourceFiles = ingest.filesDiscovered;
   const patches = ingest.patchesApplied;
-  return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${sourceFiles} supported source ${sourceFiles === 1 ? "file" : "files"} (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but no architecture hierarchy was created. The active backend may not map this source language yet.`;
+  return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${sourceFiles} supported source ${sourceFiles === 1 ? "file" : "files"} (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but no architecture hierarchy was created. The active backend may not map this source language yet. The ingest cache has been cleared, so the next 'ix map' re-parses every file.`;
 }
 
 /**
@@ -155,6 +167,12 @@ export function describeEmptyCompletedMap(
  * would make `ix status` report mapCompleted=true for a hierarchy that does not
  * exist. The next run may hash-skip unchanged files, so detection is based on
  * discovered supported sources rather than only newly committed patches.
+ */
+/**
+ * Clearing the mtime cache is what invalidates the baseline — the baseline is
+ * stored in it — and it costs a full re-parse on the next run. That is the
+ * intended trade: a workspace whose hierarchy does not exist should not also be
+ * carrying a completion record that makes `ix status` claim it does.
  */
 export function invalidateBaselineForEmptyCompletedMap(
   result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
