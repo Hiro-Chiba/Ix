@@ -225,6 +225,30 @@ describe("ix context bundle", () => {
     ]);
   });
 
+  it("classifies a workspace with no completed map baseline as unverified", () => {
+    // Ix#506: the backend answers from graph patches an initial map committed
+    // before it failed. `ix status` already reported mapCompleted:false while
+    // the bundle said current, so an agent reading the bundle trusted a graph
+    // the CLI knew was half-built.
+    const bundle = buildBundle({ ...input(), mapCompleted: false });
+
+    expect(bundle.freshness.classification).toBe("unverified");
+  });
+
+  it("does not let an unverified workspace masquerade as stale", () => {
+    // `stale` is a claim that a file changed since ingest. Without a baseline
+    // nothing is known to have changed, so the two states stay distinguishable:
+    // an agent can re-map on unverified without being told its files are dirty.
+    const unverified = buildBundle({ ...input(), mapCompleted: false });
+    const stale = buildBundle({
+      ...input(), mapCompleted: true, facts: makeFacts({ stale: true }),
+    });
+
+    expect(unverified.freshness.classification).toBe("unverified");
+    expect(unverified.freshness.stale).toBe(false);
+    expect(stale.freshness.classification).toBe("stale");
+  });
+
   it("asks about each entity's own staleness instead of copying the target's", () => {
     // `freshness` is the target's, from the facts collector. Every other entity
     // has its own source file and its own answer — stamping the target's onto

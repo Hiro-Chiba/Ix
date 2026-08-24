@@ -137,6 +137,26 @@ export function detectStaleFiles(
 }
 
 /**
+ * Whether the active workspace has a completed map baseline.
+ *
+ * A baseline is written only by a local ingest that finished with no parse or
+ * commit errors, so its absence means one of three things: no map has been run,
+ * the initial map committed graph patches but never completed, or the workspace
+ * was ingested through the cloud runner, which writes no local baseline. In all
+ * three the backend may still answer reads from partially committed data (#506).
+ * None of them justify calling an individual file stale — that is a claim about
+ * a file having changed — so callers use this to report the *result set* as
+ * unverified rather than dressing up every file as modified.
+ */
+export function hasCompletedMapBaseline(root?: string): boolean {
+  try {
+    return loadIngestBaseline(path.resolve(root ?? resolveWorkspaceRoot())) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if a specific file path differs from the active workspace's ingest baseline.
  *
  * Synchronous now that it reads a local file instead of the patch log. It is
@@ -161,10 +181,14 @@ export function createStaleProbe(): (filePath: string) => boolean {
   const baseline = loadIngestBaseline(workspaceRoot);
 
   return (filePath: string): boolean => {
-    // A baseline is written only after a map completes successfully. The
-    // backend can already contain partial commits when an initial map fails,
-    // so absence means its results are unverified rather than current.
-    if (!baseline) return true;
+    // No baseline means the question this probe answers — "did this file change
+    // since it was ingested?" — has no answer, not that the answer is yes. The
+    // baseline is absent for a cloud-ingested workspace and for any workspace
+    // whose ingest never completed cleanly, so answering `true` reported every
+    // result of every command as modified in repos that were perfectly current.
+    // That unverified state is carried by `ix context`'s freshness
+    // classification instead, which can say so without claiming a file changed.
+    if (!baseline) return false;
 
     const absolutePath = path.isAbsolute(filePath)
       ? path.resolve(filePath)
