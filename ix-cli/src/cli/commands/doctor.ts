@@ -3,6 +3,8 @@ import chalk from "chalk";
 import { renderSection, renderSuccess, renderError } from "../ui.js";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
+import { resolveWorkspaceId } from "../bootstrap.js";
+import { resolveReadSystemId } from "../resolve.js";
 import { llmLine, printLlmLines } from "../llm.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join as pathJoin, win32 as winPath } from "node:path";
@@ -127,7 +129,12 @@ export function registerDoctorCommand(program: Command): void {
       // hoisted so a run that never reaches those checks still never asks, and
       // so a failure is still reported per check rather than aborting both.
       let statsOnce: Promise<any> | undefined;
-      const sharedStats = (): Promise<any> => (statsOnce ??= client.stats());
+      const sharedStats = (): Promise<any> => (statsOnce ??= (async () => {
+        // The unscoped endpoint includes tombstoned nodes. Use the same active
+        // workspace/system scope as `ix stats` so a reset graph stays empty.
+        const systemId = await resolveReadSystemId(client);
+        return client.stats({ workspaceId: systemId ? undefined : resolveWorkspaceId(), systemId });
+      })());
 
       const checks: Check[] = [
         {

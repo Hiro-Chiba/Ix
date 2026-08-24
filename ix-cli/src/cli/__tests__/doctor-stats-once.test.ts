@@ -1,17 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 
-const statsCalls = { n: 0 };
+const statsCalls: Array<{ workspaceId?: string; systemId?: string } | undefined> = [];
+const scope = { workspaceId: "workspace-current", systemId: undefined as string | undefined };
 
 vi.mock("../../client/api.js", () => ({
   IxClient: class {
-    async stats() {
-      statsCalls.n += 1;
-      return { nodes: { total: 10 }, edges: { total: 20 } };
+    async stats(opts?: { workspaceId?: string; systemId?: string }) {
+      statsCalls.push(opts);
+      if (opts?.workspaceId === scope.workspaceId ||
+          (scope.systemId !== undefined && opts?.systemId === scope.systemId)) {
+        return { nodes: { total: 3457 }, edges: { total: 10365 } };
+      }
+      return { nodes: { total: 22969 }, edges: { total: 10365 } };
     }
     async conflicts() { return []; }
     async health() { return { status: "ok" }; }
   },
+}));
+
+vi.mock("../bootstrap.js", async (orig) => ({
+  ...(await orig<typeof import("../bootstrap.js")>()),
+  resolveWorkspaceId: () => scope.workspaceId,
+}));
+
+vi.mock("../resolve.js", async (orig) => ({
+  ...(await orig<typeof import("../resolve.js")>()),
+  resolveReadSystemId: async () => scope.systemId,
 }));
 
 // Doctor also inspects the live container and probes the schema. Both are
@@ -34,7 +49,9 @@ let savedEndpoint: string | undefined;
 
 beforeEach(() => {
   vi.resetModules();
-  statsCalls.n = 0;
+  statsCalls.length = 0;
+  scope.workspaceId = "workspace-current";
+  scope.systemId = undefined;
   // Belt and braces with the mocks above: nothing in this test may depend on a
   // backend being reachable, or on how quickly a given OS refuses a connection.
   savedEndpoint = process.env.IX_ENDPOINT;
@@ -46,12 +63,13 @@ afterEach(() => {
   else process.env.IX_ENDPOINT = savedEndpoint;
 });
 
-async function runDoctor(): Promise<void> {
+async function runDoctor(): Promise<string[]> {
   const { registerDoctorCommand } = await import("../commands/doctor.js");
   const program = new Command();
   program.name("ix").exitOverride();
   registerDoctorCommand(program);
-  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const lines: string[] = [];
+  const log = vi.spyOn(console, "log").mockImplementation((...args) => lines.push(args.join(" ")));
   const err = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     await program.parseAsync(["doctor", "--format", "llm"], { from: "user" });
@@ -59,6 +77,7 @@ async function runDoctor(): Promise<void> {
     log.mockRestore();
     err.mockRestore();
   }
+  return lines;
 }
 
 describe("ix doctor", () => {
@@ -70,6 +89,21 @@ describe("ix doctor", () => {
    */
   it("asks the backend for stats once, not once per check that reads it", async () => {
     await runDoctor();
-    expect(statsCalls.n).toBe(1);
+    expect(statsCalls).toHaveLength(1);
+  });
+
+  it("reports active workspace counts rather than unscoped tombstones", async () => {
+    const lines = await runDoctor();
+
+    expect(statsCalls).toEqual([{ workspaceId: "workspace-current", systemId: undefined }]);
+    expect(lines).toContain('check name="Graph has nodes" status=ok detail="3457 nodes"');
+  });
+
+  it("uses the active system scope for a co-ingested workspace", async () => {
+    scope.systemId = "system-current";
+
+    await runDoctor();
+
+    expect(statsCalls).toEqual([{ workspaceId: undefined, systemId: "system-current" }]);
   });
 });
