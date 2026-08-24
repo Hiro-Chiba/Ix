@@ -2,16 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 
 const statsCalls: Array<{ workspaceId?: string; systemId?: string } | undefined> = [];
-const scope = { workspaceId: "workspace-current", systemId: undefined as string | undefined };
+const scope = {
+  workspaceId: "workspace-current" as string | undefined,
+  systemId: undefined as string | undefined,
+};
 
 vi.mock("../../client/api.js", () => ({
   IxClient: class {
     async stats(opts?: { workspaceId?: string; systemId?: string }) {
       statsCalls.push(opts);
-      if (opts?.workspaceId === scope.workspaceId ||
-          (scope.systemId !== undefined && opts?.systemId === scope.systemId)) {
-        return { nodes: { total: 3457 }, edges: { total: 10365 } };
-      }
+      // Both ids undefined is the unscoped call, not a match on a scope that
+      // happens to be unset — compare only ids that are actually present, or
+      // `undefined === undefined` silently answers with the workspace figure.
+      const scoped =
+        (opts?.workspaceId !== undefined && opts.workspaceId === scope.workspaceId) ||
+        (opts?.systemId !== undefined && opts.systemId === scope.systemId);
+      if (scoped) return { nodes: { total: 3457 }, edges: { total: 10365 } };
       return { nodes: { total: 22969 }, edges: { total: 10365 } };
     }
     async conflicts() { return []; }
@@ -96,14 +102,25 @@ describe("ix doctor", () => {
     const lines = await runDoctor();
 
     expect(statsCalls).toEqual([{ workspaceId: "workspace-current", systemId: undefined }]);
-    expect(lines).toContain('check name="Graph has nodes" status=ok detail="3457 nodes"');
+    expect(lines).toContain('check name="Graph has nodes" status=ok detail="3457 nodes in this workspace"');
   });
 
   it("uses the active system scope for a co-ingested workspace", async () => {
     scope.systemId = "system-current";
 
-    await runDoctor();
+    const lines = await runDoctor();
 
     expect(statsCalls).toEqual([{ workspaceId: undefined, systemId: "system-current" }]);
+    expect(lines).toContain('check name="Graph has nodes" status=ok detail="3457 nodes in this system"');
+  });
+
+  it("says the count is unscoped when no workspace is registered", async () => {
+    // A count of everything is not wrong here, but it is the one case where
+    // naming a scope would be — there is no active workspace to name.
+    scope.workspaceId = undefined;
+
+    const lines = await runDoctor();
+
+    expect(lines).toContain('check name="Graph has nodes" status=ok detail="22969 nodes in all workspaces"');
   });
 });
