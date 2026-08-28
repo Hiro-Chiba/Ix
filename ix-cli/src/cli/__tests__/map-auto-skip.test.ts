@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyRequestedMapCoalesceExitCode,
   describeEmptyCompletedMap,
+  describeSeverelyIncompleteCompletedMap,
   invalidateBaselineForEmptyCompletedMap,
+  invalidateBaselineForIncompleteCompletedMap,
   mapModeForIngest,
   registerMapCommand,
   requestedMapCoalesceExitCode,
@@ -206,5 +208,56 @@ describe('describeEmptyCompletedMap', () => {
       parseErrors: 0,
       commitErrors: 0,
     })).toBeDefined();
+  });
+});
+
+describe('describeSeverelyIncompleteCompletedMap', () => {
+  const cleanIngest = {
+    filesDiscovered: 200,
+    patchesApplied: 200,
+    parseErrors: 0,
+    commitErrors: 0,
+  };
+
+  it('rejects a completed hierarchy that covers no more than half of the source files', () => {
+    const message = describeSeverelyIncompleteCompletedMap({
+      file_count: 100,
+      outcome: 'full_local_completed',
+    }, cleanIngest);
+
+    expect(message).toContain('mapped only 100 of 200 supported source files');
+    expect(message).toContain('architecture hierarchy is severely incomplete');
+  });
+
+  it('allows ordinary small omissions', () => {
+    expect(describeSeverelyIncompleteCompletedMap({
+      file_count: 190,
+      outcome: 'full_local_completed',
+    }, cleanIngest)).toBeUndefined();
+  });
+
+  it('does not replace an ingest failure with a coverage diagnosis', () => {
+    expect(describeSeverelyIncompleteCompletedMap({
+      file_count: 1,
+      outcome: 'full_local_completed',
+    }, { ...cleanIngest, commitErrors: 1 })).toBeUndefined();
+  });
+
+  it('invalidates the completion baseline for a severely partial hierarchy', () => {
+    const invalidate = vi.fn();
+    const message = invalidateBaselineForIncompleteCompletedMap({
+      file_count: 1,
+      region_count: 0,
+      regions: [],
+      outcome: 'full_local_completed',
+    }, {
+      filesDiscovered: 2,
+      patchesApplied: 2,
+      parseErrors: 0,
+      commitErrors: 0,
+    }, '/workspace/mixed', invalidate);
+
+    expect(message).toContain('mapped only 1 of 2');
+    expect(invalidate).toHaveBeenCalledWith('/workspace/mixed');
   });
 });

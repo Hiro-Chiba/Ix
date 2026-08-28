@@ -163,6 +163,27 @@ export function describeEmptyCompletedMap(
 }
 
 /**
+ * A non-empty hierarchy can still be unusably partial when the backend maps
+ * only a small subset of the source graph. Allow ordinary small omissions,
+ * but reject a completed result that covers no more than half of a clean
+ * local ingest.
+ */
+export function describeSeverelyIncompleteCompletedMap(
+  result: Pick<MapResult, "file_count" | "outcome">,
+  ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
+): string | undefined {
+  if (!ingest || ingest.filesDiscovered < 2 || ingest.parseErrors > 0 || ingest.commitErrors > 0) {
+    return undefined;
+  }
+  if (!result.outcome || !COMPLETED_MAP_OUTCOMES.has(result.outcome)) return undefined;
+  if (result.file_count <= 0 || result.file_count * 2 > ingest.filesDiscovered) return undefined;
+
+  const sourceFiles = ingest.filesDiscovered;
+  const patches = ingest.patchesApplied;
+  return `Backend reported ${result.outcome}, but mapped only ${result.file_count} of ${sourceFiles} supported source files after a clean local ingest (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but the architecture hierarchy is severely incomplete. The ingest cache has been cleared, so the next 'ix map' re-parses every file.`;
+}
+
+/**
  * An empty completed map invalidates the local completion baseline. Keeping it
  * would make `ix status` report mapCompleted=true for a hierarchy that does not
  * exist. The next run may hash-skip unchanged files, so detection is based on
@@ -181,6 +202,18 @@ export function invalidateBaselineForEmptyCompletedMap(
   invalidate: (root: string) => void = clearIngestMtimeCache,
 ): string | undefined {
   const message = describeEmptyCompletedMap(result, ingest);
+  if (message) invalidate(projectRoot);
+  return message;
+}
+
+export function invalidateBaselineForIncompleteCompletedMap(
+  result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
+  ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
+  projectRoot: string,
+  invalidate: (root: string) => void = clearIngestMtimeCache,
+): string | undefined {
+  const message = describeEmptyCompletedMap(result, ingest)
+    ?? describeSeverelyIncompleteCompletedMap(result, ingest);
   if (message) invalidate(projectRoot);
   return message;
 }
@@ -403,7 +436,7 @@ Examples:
       if (mapInterval) { clearInterval(mapInterval); process.stderr.write('\r' + ' '.repeat(60) + '\r'); }
       const mapMs = Math.round(performance.now() - mapStart);
 
-      const emptyMapError = invalidateBaselineForEmptyCompletedMap(result, localIngest, cwd);
+      const emptyMapError = invalidateBaselineForIncompleteCompletedMap(result, localIngest, cwd);
       if (emptyMapError) {
         emitError(emptyMapError);
         process.exitCode = 1;
