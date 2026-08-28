@@ -115,7 +115,7 @@ describe('describeEmptyCompletedMap', () => {
     expect(message).toContain('mapped 0 files after local ingest found 260 supported source files');
     expect(message).toContain('(260 patches committed)');
     expect(message).toContain('no architecture hierarchy was created');
-    expect(message).toContain("the next 'ix map' re-parses every file");
+    expect(message).toContain("the next 'ix map' can reuse unchanged files");
   });
 
   it('does not reject an actually empty workspace', () => {
@@ -185,7 +185,7 @@ describe('describeEmptyCompletedMap', () => {
     })).toBeUndefined();
   });
 
-  it('invalidates the current workspace baseline, including on an unchanged retry', () => {
+  it('invalidates the architecture baseline, including on an unchanged retry', () => {
     const invalidate = vi.fn();
     const message = invalidateBaselineForEmptyCompletedMap(emptyResult, {
       filesDiscovered: 260,
@@ -195,6 +195,7 @@ describe('describeEmptyCompletedMap', () => {
     }, '/workspace/account', invalidate);
 
     expect(message).toContain('(0 patches committed)');
+    expect(message).toContain('source ingest baseline was preserved');
     expect(invalidate).toHaveBeenCalledOnce();
     expect(invalidate).toHaveBeenCalledWith('/workspace/account');
   });

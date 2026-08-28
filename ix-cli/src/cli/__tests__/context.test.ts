@@ -225,12 +225,8 @@ describe("ix context bundle", () => {
     ]);
   });
 
-  it("classifies a workspace with no completed map baseline as unverified", () => {
-    // Ix#506: the backend answers from graph patches an initial map committed
-    // before it failed. `ix status` already reported mapCompleted:false while
-    // the bundle said current, so an agent reading the bundle trusted a graph
-    // the CLI knew was half-built.
-    const bundle = buildBundle({ ...input(), mapCompleted: false });
+  it("classifies a workspace with no completed source graph as unverified", () => {
+    const bundle = buildBundle({ ...input(), graphCompleted: false });
 
     expect(bundle.freshness.classification).toBe("unverified");
   });
@@ -239,9 +235,9 @@ describe("ix context bundle", () => {
     // `stale` is a claim that a file changed since ingest. Without a baseline
     // nothing is known to have changed, so the two states stay distinguishable:
     // an agent can re-map on unverified without being told its files are dirty.
-    const unverified = buildBundle({ ...input(), mapCompleted: false });
+    const unverified = buildBundle({ ...input(), graphCompleted: false });
     const stale = buildBundle({
-      ...input(), mapCompleted: true, facts: makeFacts({ stale: true }),
+      ...input(), graphCompleted: true, facts: makeFacts({ stale: true }),
     });
 
     expect(unverified.freshness.classification).toBe("unverified");

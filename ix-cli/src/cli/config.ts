@@ -16,6 +16,12 @@ export function ingestMtimeCachePath(projectRoot: string): string {
   return join(homedir(), ".ix", `ingest_mtimes_${key}.json`);
 }
 
+/** Path to the architecture-map completion marker for one project root. */
+export function mapBaselinePath(projectRoot: string): string {
+  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  return join(homedir(), ".ix", `map_baseline_${key}.json`);
+}
+
 /**
  * Path to the cached answer to "is this workspace stitched into a System?".
  *
@@ -68,9 +74,20 @@ export function clearStitchScopeCache(workspaceId: string): void {
   try { rmSync(stitchScopeCachePath(workspaceId), { force: true }); } catch { /* non-critical */ }
 }
 
-/** Remove the ingest mtime cache so the next map re-ingests every file. Best-effort. */
+/** Remove only the architecture-map completion marker. Best-effort. */
+export function clearMapBaseline(projectRoot: string): void {
+  try { rmSync(mapBaselinePath(projectRoot), { force: true }); } catch { /* non-critical */ }
+}
+
+/**
+ * Remove all local graph baselines so the next map re-ingests every file.
+ *
+ * Reset and workspace migration invalidate both the source graph and the
+ * hierarchy. A failed hierarchy build clears only `clearMapBaseline` instead.
+ */
 export function clearIngestMtimeCache(projectRoot: string): void {
   try { rmSync(ingestMtimeCachePath(projectRoot), { force: true }); } catch { /* non-critical */ }
+  clearMapBaseline(projectRoot);
 }
 
 export interface WorkspaceConfig {
