@@ -15,6 +15,7 @@ import {
   isNonStandardBackend,
 } from "../backend-status.js";
 import { backendCeiling, isNewer, readBackendHealth } from "./upgrade.js";
+import { detectStaleFiles } from "../stale.js";
 
 interface CheckResult {
   ok: boolean;
@@ -211,6 +212,26 @@ export function registerDoctorCommand(program: Command): void {
             // is read on the not-ok branch, so `ok: true` here would render as a
             // clean pass and say nothing.
             return { ok: false, warn: true, detail: "none registered yet — run `ix map`" };
+          },
+        },
+        {
+          name: "Completed map for this workspace",
+          run: async () => {
+            if (!matchedWorkspace) {
+              return { ok: false, warn: true, detail: "no local workspace to check" };
+            }
+            try {
+              const stale = detectStaleFiles(matchedWorkspace.root_path);
+              if (stale.mapCompleted) {
+                return { ok: true, detail: `recorded at revision ${stale.currentRev}` };
+              }
+              return {
+                ok: false,
+                detail: "no completed map baseline — the graph may be partial. Run `ix map`.",
+              };
+            } catch (e: any) {
+              return { ok: false, detail: e.message ?? "map completion check failed" };
+            }
           },
         },
         {

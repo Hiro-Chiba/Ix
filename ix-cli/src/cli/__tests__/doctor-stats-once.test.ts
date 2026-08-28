@@ -16,6 +16,7 @@ const scope = {
   matched: undefined as FakeWorkspace | undefined,
   fallback: undefined as FakeWorkspace | undefined,
   systemId: undefined as string | undefined,
+  mapCompleted: true,
 };
 
 vi.mock("../../client/api.js", () => ({
@@ -52,6 +53,16 @@ vi.mock("../resolve.js", async (orig) => ({
   resolveReadSystemId: async () => scope.systemId,
 }));
 
+vi.mock("../stale.js", () => ({
+  detectStaleFiles: () => ({
+    mapCompleted: scope.mapCompleted,
+    currentRev: scope.mapCompleted ? 42 : 0,
+    lastIngestAt: scope.mapCompleted ? "2026-01-01T00:00:00.000Z" : null,
+    staleFiles: 0,
+    sampleChangedFiles: [],
+  }),
+}));
+
 // Doctor also inspects the live container and probes the schema. Both are
 // mocked, not merely pointed somewhere harmless: an unmocked `docker inspect`
 // or socket connect is slow-and-variable rather than fast-and-failing, which is
@@ -76,6 +87,7 @@ beforeEach(() => {
   scope.matched = CURRENT;
   scope.fallback = undefined;
   scope.systemId = undefined;
+  scope.mapCompleted = true;
   // Belt and braces with the mocks above: nothing in this test may depend on a
   // backend being reachable, or on how quickly a given OS refuses a connection.
   savedEndpoint = process.env.IX_ENDPOINT;
@@ -127,6 +139,17 @@ describe("ix doctor", () => {
     const lines = await runDoctor();
 
     expect(lines).toContain(`check name="Workspace for this directory" status=ok detail="workspace 'current-repo'"`);
+  });
+
+  it("does not report a partial graph as healthy when no completed map baseline exists", async () => {
+    scope.mapCompleted = false;
+
+    const lines = await runDoctor();
+
+    expect(lines[0]).toContain("healthy=false");
+    expect(lines).toContain(
+      'check name="Completed map for this workspace" status=fail detail="no completed map baseline — the graph may be partial. Run `ix map`."',
+    );
   });
 
   it("uses the active system scope for a co-ingested workspace", async () => {
