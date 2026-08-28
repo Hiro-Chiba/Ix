@@ -67,6 +67,22 @@ describe('dedupeDiscoveredFilePaths', () => {
     }
   });
 
+  it('skips generated dependency lockfiles that expand into oversized graph patches', () => {
+    const root = join('/repo', 'project');
+    const discovery = discoverIngestFilePaths([
+      join(root, 'package.json'),
+      join(root, 'package-lock.json'),
+      join(root, 'npm-shrinkwrap.json'),
+      join(root, 'pnpm-lock.yaml'),
+      join(root, 'src', 'index.ts'),
+    ], root, (filePath) => filePath);
+
+    expect(discovery.files).toEqual([
+      join(root, 'package.json'),
+      join(root, 'src', 'index.ts'),
+    ]);
+  });
+
   it('confines a canonical path to the discovery root', () => {
     const root = join('/repo', 'project');
     expect(isWithinDiscoveryRoot(root, join(root, 'src', 'app.ts'))).toBe(true);

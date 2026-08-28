@@ -113,7 +113,14 @@ const GENERATED_FILE_PREFIXES = [
   'mock_',         // gomock convention
 ];
 
+const GENERATED_FILE_NAMES = new Set([
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'pnpm-lock.yaml',
+]);
+
 function isGeneratedFile(basename: string): boolean {
+  if (GENERATED_FILE_NAMES.has(basename)) return true;
   for (const suffix of GENERATED_FILE_SUFFIXES) {
     if (basename.endsWith(suffix)) return true;
   }
@@ -229,7 +236,8 @@ export function discoverIngestFilePaths(
   root: string | undefined,
   canonicalize: (filePath: string) => string = canonicalizeDiscoveredFilePath,
 ): { files: string[]; outsideRoot: number } {
-  const canonical = dedupeDiscoveredFilePaths(discovered, canonicalize);
+  const canonical = dedupeDiscoveredFilePaths(discovered, canonicalize)
+    .filter((candidate) => !isGeneratedFile(nodePath.basename(candidate)));
   if (root === undefined) return { files: canonical, outsideRoot: 0 };
   // Canonicalize the root too. Comparing a resolved file against an unresolved
   // root drops everything whenever the root is itself reached through a link —
