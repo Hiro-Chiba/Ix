@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeCommitOutcome, ingestCompletedCleanly } from "../commands/ingest.js";
+import { describeCommitOutcome, describeStitchFailure, ingestCompletedCleanly } from "../commands/ingest.js";
 
 describe("describeCommitOutcome", () => {
   it("says nothing when every patch committed", () => {
@@ -104,5 +104,15 @@ describe("ingestCompletedCleanly", () => {
 
   it("is true only when neither happened", () => {
     expect(ingestCompletedCleanly(0, 0)).toBe(true);
+  });
+});
+
+describe("describeStitchFailure", () => {
+  it("reports incomplete cross-repository relationships without dumping an HTML response", () => {
+    const message = describeStitchFailure(new Error("504: <html>\nlarge proxy response"));
+
+    expect(message).toContain("Cross-workspace stitch failed");
+    expect(message).toContain("cross-repository relationships may be incomplete");
+    expect(message).not.toContain("large proxy response");
   });
 });

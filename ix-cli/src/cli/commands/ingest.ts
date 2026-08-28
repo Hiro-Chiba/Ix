@@ -793,6 +793,13 @@ export interface IngestFilesSummary {
   patchesApplied: number;
   parseErrors: number;
   commitErrors: number;
+  stitchErrors: number;
+}
+
+export function describeStitchFailure(error: unknown): string {
+  const status = String(error).match(/(?:^Error:\s*)?(\d{3}):/);
+  const detail = status ? `HTTP ${status[1]}` : "backend request failed";
+  return `Warning: Cross-workspace stitch failed (${detail}). Source patches were committed, but cross-repository relationships may be incomplete.`;
 }
 
 /**
@@ -1175,6 +1182,8 @@ export async function ingestFiles(
   let filesSkipped = 0;
   let parseErrors = 0;
   let commitErrors = 0;
+  let stitchErrors = 0;
+  let stitchError: unknown;
   let tooLarge = 0;
   let minifiedLikely = 0;
   let outsideRoot = 0;
@@ -2122,6 +2131,8 @@ export async function ingestFiles(
           clearStitchScopeCache(workspaceId);
         }
       } catch (err) {
+        stitchErrors++;
+        stitchError = err;
         if (debug) process.stderr.write(`  [stitch skipped] ${err}\n`);
       }
     }
@@ -2170,7 +2181,12 @@ export async function ingestFiles(
     patchesApplied,
     parseErrors,
     commitErrors,
+    stitchErrors,
   };
+  if (stitchErrors > 0) {
+    process.stderr.write(`  ${describeStitchFailure(stitchError)}\n`);
+    process.exitCode = 1;
+  }
   if (commitReport.kind === "warn") {
     process.stderr.write(`  ${commitReport.message}\n`);
     // Non-zero even though we do not throw. A partial failure still means the
@@ -2197,6 +2213,7 @@ export async function ingestFiles(
       latestRev,
       skipReasons: { unchanged: filesSkipped, emptyFile: 0, parseError: parseErrors, tooLarge, minifiedLikely, outsideRoot },
       commitErrors,
+      stitchErrors,
       elapsedSeconds: parseFloat(elapsed),
       timings: {
         ...timings,
