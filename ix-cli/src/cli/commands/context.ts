@@ -22,7 +22,7 @@ import { llmLine, printLlmLines } from "../llm.js";
 import { parseBudgetOption, parsePickOption, parseRevisionOption } from "../options.js";
 import { resolveFileOrEntity } from "../resolve.js";
 import { createStaleProbe, hasCompletedMapBaseline } from "../stale.js";
-import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure } from "../ui.js";
+import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure, reportUnresolvedTarget } from "../ui.js";
 
 /** The four `--max-*` knobs that bound a bundle. */
 interface BudgetSnapshot {
@@ -307,7 +307,10 @@ export function registerContextCommand(program: Command): void {
         path: opts.path,
         pick: opts.pick,
       });
-      if (!resolved) return;
+      if (!resolved) {
+        reportUnresolvedTarget(target, opts.format);
+        return;
+      }
 
       const budgets = clampBudgets(opts);
       const asOfRev = opts.asOfRev;
