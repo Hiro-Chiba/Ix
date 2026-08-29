@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeCommitOutcome, describeStitchFailure, ingestCompletedCleanly } from "../commands/ingest.js";
+import { describeCommitOutcome, describeStitchFailure, ingestCompletedCleanly, isStitchUnsupported } from "../commands/ingest.js";
 
 describe("describeCommitOutcome", () => {
   it("says nothing when every patch committed", () => {
@@ -112,7 +112,27 @@ describe("describeStitchFailure", () => {
     const message = describeStitchFailure(new Error("504: <html>\nlarge proxy response"));
 
     expect(message).toContain("Cross-workspace stitch failed");
+    expect(message).toContain("HTTP 504");
     expect(message).toContain("cross-repository relationships may be incomplete");
     expect(message).not.toContain("large proxy response");
+  });
+
+  it("does not read a three-digit run elsewhere in the message as a status", () => {
+    expect(describeStitchFailure(new Error("connect ECONNREFUSED 127.0.0.1:8090")))
+      .toContain("backend request failed");
+  });
+});
+
+describe("isStitchUnsupported", () => {
+  it.each([404, 501])("treats %d as a backend that does not implement stitch", (status) => {
+    expect(isStitchUnsupported(new Error(`${status}: Not Found`))).toBe(true);
+  });
+
+  it.each([500, 502, 504])("treats %d as a real failure worth surfacing", (status) => {
+    expect(isStitchUnsupported(new Error(`${status}: upstream timeout`))).toBe(false);
+  });
+
+  it("treats a transport error with no status as a real failure", () => {
+    expect(isStitchUnsupported(new Error("connect ECONNREFUSED 127.0.0.1:8090"))).toBe(false);
   });
 });

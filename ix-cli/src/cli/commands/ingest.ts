@@ -796,9 +796,37 @@ export interface IngestFilesSummary {
   stitchErrors: number;
 }
 
+/**
+ * The HTTP status `IxClient` put at the front of its `${status}: ${body}`
+ * error, when there is one. Anchored, so a three-digit run anywhere else in the
+ * message — a port, a byte count, a timestamp — cannot be read as a status.
+ */
+function stitchFailureStatus(error: unknown): number | null {
+  const match = /^(?:Error:\s*)?(\d{3}):/.exec(String(error));
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * A backend that does not implement `/v1/stitch` is not a failed stitch.
+ *
+ * The stitch call has always been best-effort precisely so an older backend
+ * keeps working, and it is issued on every full local map. Reporting 404/501
+ * as a degraded graph would make `ix map` warn and exit 1 on every run against
+ * such a backend, for a step it was never going to perform.
+ */
+export function isStitchUnsupported(error: unknown): boolean {
+  const status = stitchFailureStatus(error);
+  return status === 404 || status === 501;
+}
+
+/**
+ * Ix#528: describe the failure without echoing the response body. The observed
+ * case is a proxy 504 whose body is a full HTML error page, and pasting that
+ * into a map summary buries the one line that matters.
+ */
 export function describeStitchFailure(error: unknown): string {
-  const status = String(error).match(/(?:^Error:\s*)?(\d{3}):/);
-  const detail = status ? `HTTP ${status[1]}` : "backend request failed";
+  const status = stitchFailureStatus(error);
+  const detail = status === null ? "backend request failed" : `HTTP ${status}`;
   return `Warning: Cross-workspace stitch failed (${detail}). Source patches were committed, but cross-repository relationships may be incomplete.`;
 }
 
@@ -2131,8 +2159,12 @@ export async function ingestFiles(
           clearStitchScopeCache(workspaceId);
         }
       } catch (err) {
-        stitchErrors++;
-        stitchError = err;
+        // Unsupported is not failed: an older backend answers 404 here, and
+        // that is the case this call has always been allowed to shrug off.
+        if (!isStitchUnsupported(err)) {
+          stitchErrors++;
+          stitchError = err;
+        }
         if (debug) process.stderr.write(`  [stitch skipped] ${err}\n`);
       }
     }
