@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -144,6 +144,41 @@ describe('discovery symlink containment', () => {
       expect(discovery.outsideRoot).toBe(1);
     },
   );
+
+  it('skips generated dependency lockfiles that expand into oversized graph patches', () => {
+    // Ix#523: a 646 KB `package-lock.json` is under MAX_FILE_BYTES but its
+    // patch is over the proxy's body limit, so the commit 413s and the map
+    // exits non-zero with no completion baseline.
+    //
+    // Asserted through `tryGitLsFiles` — the listing `runIngest` actually
+    // discovers from — rather than by handing `discoverIngestFilePaths` a
+    // literal list. That function confines paths to the root; it is not where
+    // generated files are dropped, so an assertion there would pass while the
+    // real discovery path still yielded the lockfile.
+    const repo = scratchDir('ix-lockfile-');
+    writeFileSync(join(repo, 'package.json'), '{"name":"pkg"}\n');
+    writeFileSync(join(repo, 'package-lock.json'), '{"lockfileVersion":3}\n');
+    writeFileSync(join(repo, 'npm-shrinkwrap.json'), '{"lockfileVersion":3}\n');
+    writeFileSync(join(repo, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+    writeFileSync(join(repo, 'packages.lock.json'), '{"version":1}\n');
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    writeFileSync(join(repo, 'src', 'index.ts'), 'export const ok = 1;\n');
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+    } catch {
+      return; // no git — nothing to assert
+    }
+
+    const listed = tryGitLsFiles(repo, true);
+    expect(listed).not.toBeNull();
+    // Basenames, not full paths: `scratchDir` realpaths its temp directory and
+    // `tryGitLsFiles` canonicalizes independently, and on a Windows runner
+    // those disagree on how to spell the same directory (`RUNNER~1` vs
+    // `runneradmin`). Which files survived is the claim; how the path spells
+    // their parent is not.
+    expect(listed!.map((filePath) => basename(filePath)).sort())
+      .toEqual(['index.ts', 'package.json']);
+  });
 
   it.skipIf(process.platform === 'win32')(
     'still discovers everything when the root is reached through a symlink',

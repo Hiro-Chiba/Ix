@@ -113,7 +113,25 @@ const GENERATED_FILE_PREFIXES = [
   'mock_',         // gomock convention
 ];
 
+// Generated dependency lockfiles, matched whole. Only the ones whose extension
+// SUPPORTED_EXTENSIONS actually discovers are listed: `yarn.lock`,
+// `composer.lock`, `Cargo.lock`, `Gemfile.lock`, `poetry.lock` and friends end
+// in `.lock`, which is not a discovered extension, so they never reach here.
+// A lockfile well under MAX_FILE_BYTES still expands into a graph patch larger
+// than a proxy will accept — 646 KB was enough for an HTTP 413 (Ix#523) — and
+// it describes a resolved dependency snapshot, not architecture.
+const GENERATED_FILE_NAMES = new Set([
+  'package-lock.json',    // npm
+  'npm-shrinkwrap.json',  // npm, published form
+  'pnpm-lock.yaml',       // pnpm
+  'packages.lock.json',   // NuGet
+]);
+
 function isGeneratedFile(basename: string): boolean {
+  // Lowercased for the name match alone: `isSupportedSourceFile` lowercases
+  // too, so on a case-insensitive filesystem a `Package-lock.json` is
+  // discovered and would otherwise slip past a case-sensitive comparison.
+  if (GENERATED_FILE_NAMES.has(basename.toLowerCase())) return true;
   for (const suffix of GENERATED_FILE_SUFFIXES) {
     if (basename.endsWith(suffix)) return true;
   }
@@ -793,6 +811,41 @@ export interface IngestFilesSummary {
   patchesApplied: number;
   parseErrors: number;
   commitErrors: number;
+  stitchErrors: number;
+}
+
+/**
+ * The HTTP status `IxClient` put at the front of its `${status}: ${body}`
+ * error, when there is one. Anchored, so a three-digit run anywhere else in the
+ * message — a port, a byte count, a timestamp — cannot be read as a status.
+ */
+function stitchFailureStatus(error: unknown): number | null {
+  const match = /^(?:Error:\s*)?(\d{3}):/.exec(String(error));
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * A backend that does not implement `/v1/stitch` is not a failed stitch.
+ *
+ * The stitch call has always been best-effort precisely so an older backend
+ * keeps working, and it is issued on every full local map. Reporting 404/501
+ * as a degraded graph would make `ix map` warn and exit 1 on every run against
+ * such a backend, for a step it was never going to perform.
+ */
+export function isStitchUnsupported(error: unknown): boolean {
+  const status = stitchFailureStatus(error);
+  return status === 404 || status === 501;
+}
+
+/**
+ * Ix#528: describe the failure without echoing the response body. The observed
+ * case is a proxy 504 whose body is a full HTML error page, and pasting that
+ * into a map summary buries the one line that matters.
+ */
+export function describeStitchFailure(error: unknown): string {
+  const status = stitchFailureStatus(error);
+  const detail = status === null ? "backend request failed" : `HTTP ${status}`;
+  return `Warning: Cross-workspace stitch failed (${detail}). Source patches were committed, but cross-repository relationships may be incomplete.`;
 }
 
 /**
@@ -1175,6 +1228,8 @@ export async function ingestFiles(
   let filesSkipped = 0;
   let parseErrors = 0;
   let commitErrors = 0;
+  let stitchErrors = 0;
+  let stitchError: unknown;
   let tooLarge = 0;
   let minifiedLikely = 0;
   let outsideRoot = 0;
@@ -2122,6 +2177,12 @@ export async function ingestFiles(
           clearStitchScopeCache(workspaceId);
         }
       } catch (err) {
+        // Unsupported is not failed: an older backend answers 404 here, and
+        // that is the case this call has always been allowed to shrug off.
+        if (!isStitchUnsupported(err)) {
+          stitchErrors++;
+          stitchError = err;
+        }
         if (debug) process.stderr.write(`  [stitch skipped] ${err}\n`);
       }
     }
@@ -2170,7 +2231,12 @@ export async function ingestFiles(
     patchesApplied,
     parseErrors,
     commitErrors,
+    stitchErrors,
   };
+  if (stitchErrors > 0) {
+    process.stderr.write(`  ${describeStitchFailure(stitchError)}\n`);
+    process.exitCode = 1;
+  }
   if (commitReport.kind === "warn") {
     process.stderr.write(`  ${commitReport.message}\n`);
     // Non-zero even though we do not throw. A partial failure still means the
@@ -2197,6 +2263,7 @@ export async function ingestFiles(
       latestRev,
       skipReasons: { unchanged: filesSkipped, emptyFile: 0, parseError: parseErrors, tooLarge, minifiedLikely, outsideRoot },
       commitErrors,
+      stitchErrors,
       elapsedSeconds: parseFloat(elapsed),
       timings: {
         ...timings,

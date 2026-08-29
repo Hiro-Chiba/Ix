@@ -7,6 +7,7 @@ import { detectStaleFiles } from "../stale.js";
 import { llmError, llmLine, printLlmLines } from "../llm.js";
 
 interface StatusStaleInfo {
+  graphCompleted: boolean;
   mapCompleted: boolean;
   currentRev: number;
   lastIngestAt: string | null;
@@ -18,11 +19,12 @@ interface StatusStaleInfo {
  * `ix status --format llm`.
  *
  * The reason to call `status` from an agent is to decide one thing: is the
- * graph current enough to trust, or does it need `ix map` first. `text` buries
+ * source graph current enough to trust, or does it need `ix map` first. `text` buries
  * that behind section headers, a "Last ingest" field humanised to "3h ago", and
  * a sampled file list. The `stale` field answers it directly, and
  * `last_ingest_at` stays ISO so the consumer can do its own arithmetic instead
- * of parsing prose.
+ * of parsing prose. `map_complete` separately reports whether an architecture
+ * hierarchy exists for that source revision.
  */
 export function renderStatusLlm(
   backend: string,
@@ -32,11 +34,12 @@ export function renderStatusLlm(
   const lines = [llmLine("status", [
     ["backend", backend],
     ["endpoint", endpoint],
+    ["graph_complete", staleInfo ? String(staleInfo.graphCompleted) : null],
     ["map_complete", staleInfo ? String(staleInfo.mapCompleted) : null],
     ["rev", staleInfo ? String(staleInfo.currentRev) : null],
     ["last_ingest_at", staleInfo?.lastIngestAt ?? null],
     ["stale_files", staleInfo ? String(staleInfo.staleFiles) : null],
-    ["stale", staleInfo ? (!staleInfo.mapCompleted || staleInfo.staleFiles > 0 ? "true" : "false") : null],
+    ["stale", staleInfo ? (!staleInfo.graphCompleted || staleInfo.staleFiles > 0 ? "true" : "false") : null],
   ])];
   for (const f of staleInfo?.sampleChangedFiles ?? []) {
     lines.push(llmLine("changed", [["path", f]]));
@@ -69,6 +72,7 @@ export function registerStatusCommand(program: Command): void {
         } else if (opts.format === "json") {
           const result: any = {
             backend: health.status,
+            graphCompleted: staleInfo?.graphCompleted ?? null,
             mapCompleted: staleInfo?.mapCompleted ?? null,
             currentRev: staleInfo?.currentRev ?? null,
             lastIngestAt: staleInfo?.lastIngestAt ?? null,
@@ -86,8 +90,8 @@ export function registerStatusCommand(program: Command): void {
               const ago = timeSince(staleInfo.lastIngestAt);
               renderKeyValue("Last ingest", ago);
             }
-            if (!staleInfo.mapCompleted) {
-              renderWarning("No completed map is recorded for this workspace.");
+            if (!staleInfo.graphCompleted) {
+              renderWarning("No completed source graph ingest is recorded for this workspace.");
               renderNote("Run ix map to build a trustworthy graph.");
             } else if (staleInfo.staleFiles > 0) {
               renderWarning(`${staleInfo.staleFiles} file(s) changed since last ingest:`);
@@ -100,6 +104,10 @@ export function registerStatusCommand(program: Command): void {
               renderNote("Run ix map to update.");
             } else {
               renderSuccess("Graph is up to date.");
+            }
+            if (staleInfo.graphCompleted && !staleInfo.mapCompleted) {
+              renderWarning("No completed architecture map is recorded for this source revision.");
+              renderNote("Source graph reads remain available, but hierarchy views may be incomplete.");
             }
           }
         }

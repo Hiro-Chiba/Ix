@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { type Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
-import { clearIngestMtimeCache, getEndpoint } from "../config.js";
+import { clearMapBaseline, getEndpoint } from "../config.js";
 import { roundFloat } from "../format.js";
 import { llmLine, llmError } from "../llm.js";
 import { bootstrap, resolveWorkspaceId } from "../bootstrap.js";
@@ -12,6 +12,8 @@ import { detectSystem } from "../system.js";
 import { getRemoteRunner, isCloudReady } from "../remote.js";
 import { acquireMapLock } from "../single-flight.js";
 import { canRenderProgress } from "../stderr.js";
+import { loadIngestBaseline } from "../ingest-baseline.js";
+import { saveMapBaseline } from "../map-baseline.js";
 
 // Hard wall-clock budget for a single `ix map`. Past this, the shared deadline
 // signal aborts every in-flight request and the command exits, so a single
@@ -159,30 +161,36 @@ export function describeEmptyCompletedMap(
 
   const sourceFiles = ingest.filesDiscovered;
   const patches = ingest.patchesApplied;
-  return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${sourceFiles} supported source ${sourceFiles === 1 ? "file" : "files"} (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but no architecture hierarchy was created. The active backend may not map this source language yet. The ingest cache has been cleared, so the next 'ix map' re-parses every file.`;
+  return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${sourceFiles} supported source ${sourceFiles === 1 ? "file" : "files"} (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but no architecture hierarchy was created. The active backend may not map this source language yet. The source ingest baseline was preserved, so the next 'ix map' can reuse unchanged files.`;
 }
 
 /**
- * An empty completed map invalidates the local completion baseline. Keeping it
+ * An empty completed map invalidates the architecture completion baseline. Keeping it
  * would make `ix status` report mapCompleted=true for a hierarchy that does not
  * exist. The next run may hash-skip unchanged files, so detection is based on
  * discovered supported sources rather than only newly committed patches.
- */
-/**
- * Clearing the mtime cache is what invalidates the baseline — the baseline is
- * stored in it — and it costs a full re-parse on the next run. That is the
- * intended trade: a workspace whose hierarchy does not exist should not also be
- * carrying a completion record that makes `ix status` claim it does.
  */
 export function invalidateBaselineForEmptyCompletedMap(
   result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
   ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
   projectRoot: string,
-  invalidate: (root: string) => void = clearIngestMtimeCache,
+  invalidate: (root: string) => void = clearMapBaseline,
 ): string | undefined {
   const message = describeEmptyCompletedMap(result, ingest);
   if (message) invalidate(projectRoot);
   return message;
+}
+
+/** Persist hierarchy completion only when a non-empty map was actually produced. */
+export function persistCompletedMapBaseline(
+  result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
+  projectRoot: string,
+): boolean {
+  if (result.outcome && !COMPLETED_MAP_OUTCOMES.has(result.outcome)) return false;
+  if (result.file_count === 0 && result.region_count === 0 && result.regions.length === 0) return false;
+  const sourceBaseline = loadIngestBaseline(projectRoot);
+  if (!sourceBaseline) return false;
+  return saveMapBaseline(projectRoot, sourceBaseline.currentRev);
 }
 
 type MapSortMode = "importance" | "confidence" | "size" | "alpha";
@@ -409,6 +417,7 @@ Examples:
         process.exitCode = 1;
         return;
       }
+      persistCompletedMapBaseline(result, cwd);
 
       if (silent) {
         const systems    = result.regions.filter(r => r.label_kind === "system").length;
