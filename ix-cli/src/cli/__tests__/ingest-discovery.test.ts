@@ -67,22 +67,6 @@ describe('dedupeDiscoveredFilePaths', () => {
     }
   });
 
-  it('skips generated dependency lockfiles that expand into oversized graph patches', () => {
-    const root = join('/repo', 'project');
-    const discovery = discoverIngestFilePaths([
-      join(root, 'package.json'),
-      join(root, 'package-lock.json'),
-      join(root, 'npm-shrinkwrap.json'),
-      join(root, 'pnpm-lock.yaml'),
-      join(root, 'src', 'index.ts'),
-    ], root, (filePath) => filePath);
-
-    expect(discovery.files).toEqual([
-      join(root, 'package.json'),
-      join(root, 'src', 'index.ts'),
-    ]);
-  });
-
   it('confines a canonical path to the discovery root', () => {
     const root = join('/repo', 'project');
     expect(isWithinDiscoveryRoot(root, join(root, 'src', 'app.ts'))).toBe(true);
@@ -160,6 +144,38 @@ describe('discovery symlink containment', () => {
       expect(discovery.outsideRoot).toBe(1);
     },
   );
+
+  it('skips generated dependency lockfiles that expand into oversized graph patches', () => {
+    // Ix#523: a 646 KB `package-lock.json` is under MAX_FILE_BYTES but its
+    // patch is over the proxy's body limit, so the commit 413s and the map
+    // exits non-zero with no completion baseline.
+    //
+    // Asserted through `tryGitLsFiles` — the listing `runIngest` actually
+    // discovers from — rather than by handing `discoverIngestFilePaths` a
+    // literal list. That function confines paths to the root; it is not where
+    // generated files are dropped, so an assertion there would pass while the
+    // real discovery path still yielded the lockfile.
+    const repo = scratchDir('ix-lockfile-');
+    writeFileSync(join(repo, 'package.json'), '{"name":"pkg"}\n');
+    writeFileSync(join(repo, 'package-lock.json'), '{"lockfileVersion":3}\n');
+    writeFileSync(join(repo, 'npm-shrinkwrap.json'), '{"lockfileVersion":3}\n');
+    writeFileSync(join(repo, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+    writeFileSync(join(repo, 'packages.lock.json'), '{"version":1}\n');
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    writeFileSync(join(repo, 'src', 'index.ts'), 'export const ok = 1;\n');
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+    } catch {
+      return; // no git — nothing to assert
+    }
+
+    const listed = tryGitLsFiles(repo, true);
+    expect(listed).not.toBeNull();
+    expect(listed!.sort()).toEqual([
+      join(repo, 'package.json'),
+      join(repo, 'src', 'index.ts'),
+    ].sort());
+  });
 
   it.skipIf(process.platform === 'win32')(
     'still discovers everything when the root is reached through a symlink',

@@ -113,14 +113,25 @@ const GENERATED_FILE_PREFIXES = [
   'mock_',         // gomock convention
 ];
 
+// Generated dependency lockfiles, matched whole. Only the ones whose extension
+// SUPPORTED_EXTENSIONS actually discovers are listed: `yarn.lock`,
+// `composer.lock`, `Cargo.lock`, `Gemfile.lock`, `poetry.lock` and friends end
+// in `.lock`, which is not a discovered extension, so they never reach here.
+// A lockfile well under MAX_FILE_BYTES still expands into a graph patch larger
+// than a proxy will accept — 646 KB was enough for an HTTP 413 (Ix#523) — and
+// it describes a resolved dependency snapshot, not architecture.
 const GENERATED_FILE_NAMES = new Set([
-  'package-lock.json',
-  'npm-shrinkwrap.json',
-  'pnpm-lock.yaml',
+  'package-lock.json',    // npm
+  'npm-shrinkwrap.json',  // npm, published form
+  'pnpm-lock.yaml',       // pnpm
+  'packages.lock.json',   // NuGet
 ]);
 
 function isGeneratedFile(basename: string): boolean {
-  if (GENERATED_FILE_NAMES.has(basename)) return true;
+  // Lowercased for the name match alone: `isSupportedSourceFile` lowercases
+  // too, so on a case-insensitive filesystem a `Package-lock.json` is
+  // discovered and would otherwise slip past a case-sensitive comparison.
+  if (GENERATED_FILE_NAMES.has(basename.toLowerCase())) return true;
   for (const suffix of GENERATED_FILE_SUFFIXES) {
     if (basename.endsWith(suffix)) return true;
   }
@@ -236,8 +247,7 @@ export function discoverIngestFilePaths(
   root: string | undefined,
   canonicalize: (filePath: string) => string = canonicalizeDiscoveredFilePath,
 ): { files: string[]; outsideRoot: number } {
-  const canonical = dedupeDiscoveredFilePaths(discovered, canonicalize)
-    .filter((candidate) => !isGeneratedFile(nodePath.basename(candidate)));
+  const canonical = dedupeDiscoveredFilePaths(discovered, canonicalize);
   if (root === undefined) return { files: canonical, outsideRoot: 0 };
   // Canonicalize the root too. Comparing a resolved file against an unresolved
   // root drops everything whenever the root is itself reached through a link —
