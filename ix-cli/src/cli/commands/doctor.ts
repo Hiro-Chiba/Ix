@@ -6,7 +6,7 @@ import { findWorkspaceForCwd, getDefaultWorkspace, getEndpoint } from "../config
 import { resolveReadSystemId } from "../resolve.js";
 import { llmLine, printLlmLines } from "../llm.js";
 import { existsSync, readFileSync } from "node:fs";
-import { join as pathJoin, win32 as winPath } from "node:path";
+import { join as pathJoin, resolve as resolvePath, win32 as winPath } from "node:path";
 import { homedir } from "node:os";
 import {
   BACKEND_IMAGE,
@@ -15,7 +15,9 @@ import {
   isNonStandardBackend,
 } from "../backend-status.js";
 import { backendCeiling, isNewer, readBackendHealth } from "./upgrade.js";
-import { detectStaleFiles } from "../stale.js";
+import { loadIngestBaseline } from "../ingest-baseline.js";
+import { isCloudReady } from "../remote.js";
+import { hasCompletedMapBaseline } from "../stale.js";
 
 interface CheckResult {
   ok: boolean;
@@ -215,20 +217,43 @@ export function registerDoctorCommand(program: Command): void {
           },
         },
         {
+          // Ix#525: a partially committed graph still has nodes and edges, so
+          // every check below it passes and doctor calls a half-built graph
+          // healthy. The completion markers are the only thing that knows.
+          //
+          // Reads the two marker files rather than calling `detectStaleFiles`:
+          // that walks the workspace and stats every file to answer a question
+          // about *changed* files, and this check needs neither the walk nor
+          // the answer. On a large workspace it is the whole tree per `ix
+          // doctor`.
           name: "Completed map for this workspace",
           run: async () => {
             if (!matchedWorkspace) {
               return { ok: false, warn: true, detail: "no local workspace to check" };
             }
             try {
-              const stale = detectStaleFiles(matchedWorkspace.root_path);
-              if (stale.mapCompleted) {
-                return { ok: true, detail: `recorded at revision ${stale.currentRev}` };
+              // Resolve once: both marker files are keyed by the exact root
+              // string, and `hasCompletedMapBaseline` resolves internally.
+              const root = resolvePath(matchedWorkspace.root_path);
+              const source = loadIngestBaseline(root);
+              if (!source) {
+                // No local baseline means one of: never mapped, an initial map
+                // that committed patches but never finished, or a workspace fed
+                // by the cloud runner — which writes none by design. Only the
+                // last is healthy, and only a registered runner makes it
+                // possible, so that is the one case this warns instead of fails.
+                const cloud = await isCloudReady();
+                return cloud
+                  ? { ok: false, warn: true, detail: "no local baseline — expected for a cloud-ingested workspace" }
+                  : { ok: false, detail: "no completed map baseline — the graph may be partial. Run `ix map`." };
               }
-              return {
-                ok: false,
-                detail: "no completed map baseline — the graph may be partial. Run `ix map`.",
-              };
+              if (!hasCompletedMapBaseline(root)) {
+                return {
+                  ok: false,
+                  detail: `source graph at revision ${source.currentRev} has no completed architecture map — run \`ix map\``,
+                };
+              }
+              return { ok: true, detail: `recorded at revision ${source.currentRev}` };
             } catch (e: any) {
               return { ok: false, detail: e.message ?? "map completion check failed" };
             }

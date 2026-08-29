@@ -16,7 +16,9 @@ const scope = {
   matched: undefined as FakeWorkspace | undefined,
   fallback: undefined as FakeWorkspace | undefined,
   systemId: undefined as string | undefined,
+  sourceBaseline: true,
   mapCompleted: true,
+  cloudReady: false,
 };
 
 vi.mock("../../client/api.js", () => ({
@@ -53,14 +55,29 @@ vi.mock("../resolve.js", async (orig) => ({
   resolveReadSystemId: async () => scope.systemId,
 }));
 
-vi.mock("../stale.js", () => ({
-  detectStaleFiles: () => ({
-    mapCompleted: scope.mapCompleted,
-    currentRev: scope.mapCompleted ? 42 : 0,
-    lastIngestAt: scope.mapCompleted ? "2026-01-01T00:00:00.000Z" : null,
-    staleFiles: 0,
-    sampleChangedFiles: [],
-  }),
+// The two completion markers, mocked separately because the check has to tell
+// them apart: a missing source baseline and a missing map marker are different
+// states with different verdicts.
+vi.mock("../stale.js", async (orig) => ({
+  ...(await orig<typeof import("../stale.js")>()),
+  hasCompletedMapBaseline: () => scope.mapCompleted,
+}));
+
+vi.mock("../ingest-baseline.js", async (orig) => ({
+  ...(await orig<typeof import("../ingest-baseline.js")>()),
+  loadIngestBaseline: () => scope.sourceBaseline
+    ? {
+      files: new Map<string, number>(),
+      deletedFiles: new Map<string, string[]>(),
+      currentRev: 42,
+      lastIngestAt: "2026-01-01T00:00:00.000Z",
+    }
+    : null,
+}));
+
+vi.mock("../remote.js", async (orig) => ({
+  ...(await orig<typeof import("../remote.js")>()),
+  isCloudReady: async () => scope.cloudReady,
 }));
 
 // Doctor also inspects the live container and probes the schema. Both are
@@ -87,7 +104,9 @@ beforeEach(() => {
   scope.matched = CURRENT;
   scope.fallback = undefined;
   scope.systemId = undefined;
+  scope.sourceBaseline = true;
   scope.mapCompleted = true;
+  scope.cloudReady = false;
   // Belt and braces with the mocks above: nothing in this test may depend on a
   // backend being reachable, or on how quickly a given OS refuses a connection.
   savedEndpoint = process.env.IX_ENDPOINT;
@@ -141,7 +160,17 @@ describe("ix doctor", () => {
     expect(lines).toContain(`check name="Workspace for this directory" status=ok detail="workspace 'current-repo'"`);
   });
 
-  it("does not report a partial graph as healthy when no completed map baseline exists", async () => {
+  it("reports the recorded revision when both completion markers are current", async () => {
+    const lines = await runDoctor();
+
+    expect(lines[0]).toContain("healthy=true");
+    expect(lines).toContain(
+      'check name="Completed map for this workspace" status=ok detail="recorded at revision 42"',
+    );
+  });
+
+  it("does not report a partial graph as healthy when no completed baseline exists", async () => {
+    scope.sourceBaseline = false;
     scope.mapCompleted = false;
 
     const lines = await runDoctor();
@@ -149,6 +178,35 @@ describe("ix doctor", () => {
     expect(lines[0]).toContain("healthy=false");
     expect(lines).toContain(
       'check name="Completed map for this workspace" status=fail detail="no completed map baseline — the graph may be partial. Run `ix map`."',
+    );
+  });
+
+  it("fails a clean source graph that has no architecture map for its revision", async () => {
+    scope.mapCompleted = false;
+
+    const lines = await runDoctor();
+
+    expect(lines[0]).toContain("healthy=false");
+    expect(lines).toContain(
+      'check name="Completed map for this workspace" status=fail ' +
+      'detail="source graph at revision 42 has no completed architecture map — run `ix map`"',
+    );
+  });
+
+  it("warns rather than fails when a cloud runner explains the missing local baseline", async () => {
+    // The cloud runner writes no local baseline by design, so absence is not
+    // evidence of a partial graph there — and calling it a failure would make
+    // `ix doctor` permanently unhealthy on a perfectly good cloud workspace.
+    scope.sourceBaseline = false;
+    scope.mapCompleted = false;
+    scope.cloudReady = true;
+
+    const lines = await runDoctor();
+
+    expect(lines[0]).toContain("healthy=true");
+    expect(lines).toContain(
+      'check name="Completed map for this workspace" status=warn ' +
+      'detail="no local baseline — expected for a cloud-ingested workspace"',
     );
   });
 
