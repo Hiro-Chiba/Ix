@@ -165,18 +165,55 @@ export function describeEmptyCompletedMap(
 }
 
 /**
- * An empty completed map invalidates the architecture completion baseline. Keeping it
- * would make `ix status` report mapCompleted=true for a hierarchy that does not
- * exist. The next run may hash-skip unchanged files, so detection is based on
- * discovered supported sources rather than only newly committed patches.
+ * A completed response that counted files but produced no regions is not a
+ * hierarchy either. #524: a two-file mixed PHP/JSON workspace maps
+ * `full_local_completed` with `file_count: 1` and `region_count: 0`, and the
+ * one class it did count then reports `hasMapData: false`.
+ *
+ * The signal is the absent region set, deliberately NOT a coverage ratio of
+ * mapped files to discovered files. `filesDiscovered` counts every supported
+ * extension — .md, .json, .yaml, .css — while a hierarchy only ever covers
+ * files the backend can couple, so a healthy map routinely covers a small
+ * minority of them: #534 records 381 files of ~7,400 on a real PHP workspace.
+ * Any ratio threshold rejects that map on every run, and a rejection clears
+ * the completion marker, so the workspace could never record one again.
  */
-export function invalidateBaselineForEmptyCompletedMap(
+export function describeRegionlessCompletedMap(
+  result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
+  ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
+): string | undefined {
+  if (!ingest || ingest.filesDiscovered < 2 || ingest.parseErrors > 0 || ingest.commitErrors > 0) {
+    return undefined;
+  }
+  if (!result.outcome || !COMPLETED_MAP_OUTCOMES.has(result.outcome)) return undefined;
+  // file_count 0 is the empty-map case above, which has its own diagnosis.
+  if (result.file_count <= 0) return undefined;
+  if (result.region_count !== 0 || result.regions.length !== 0) return undefined;
+
+  const sourceFiles = ingest.filesDiscovered;
+  const patches = ingest.patchesApplied;
+  return `Backend reported ${result.outcome}, but produced 0 regions while mapping ${result.file_count} of ${sourceFiles} supported source files after a clean local ingest (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but no architecture hierarchy was created for it. The source ingest baseline was preserved, so the next 'ix map' can reuse unchanged files.`;
+}
+
+/**
+ * A completed map with no usable hierarchy invalidates the architecture
+ * completion baseline. Keeping it would make `ix status` report
+ * mapCompleted=true for a hierarchy that does not exist. The next run may
+ * hash-skip unchanged files, so detection is based on discovered supported
+ * sources rather than only newly committed patches.
+ *
+ * Both rejections clear only the architecture marker: the source ingest that
+ * produced the graph was clean, and clearing its baseline too is what forced a
+ * full reparse on every retry (#534).
+ */
+export function invalidateBaselineForIncompleteCompletedMap(
   result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
   ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
   projectRoot: string,
   invalidate: (root: string) => void = clearMapBaseline,
 ): string | undefined {
-  const message = describeEmptyCompletedMap(result, ingest);
+  const message = describeEmptyCompletedMap(result, ingest)
+    ?? describeRegionlessCompletedMap(result, ingest);
   if (message) invalidate(projectRoot);
   return message;
 }
@@ -187,7 +224,7 @@ export function persistCompletedMapBaseline(
   projectRoot: string,
 ): boolean {
   if (result.outcome && !COMPLETED_MAP_OUTCOMES.has(result.outcome)) return false;
-  if (result.file_count === 0 && result.region_count === 0 && result.regions.length === 0) return false;
+  if (result.region_count === 0 && result.regions.length === 0) return false;
   const sourceBaseline = loadIngestBaseline(projectRoot);
   if (!sourceBaseline) return false;
   return saveMapBaseline(projectRoot, sourceBaseline.currentRev);
@@ -411,7 +448,7 @@ Examples:
       if (mapInterval) { clearInterval(mapInterval); process.stderr.write('\r' + ' '.repeat(60) + '\r'); }
       const mapMs = Math.round(performance.now() - mapStart);
 
-      const emptyMapError = invalidateBaselineForEmptyCompletedMap(result, localIngest, cwd);
+      const emptyMapError = invalidateBaselineForIncompleteCompletedMap(result, localIngest, cwd);
       if (emptyMapError) {
         emitError(emptyMapError);
         process.exitCode = 1;

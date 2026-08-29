@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyRequestedMapCoalesceExitCode,
   describeEmptyCompletedMap,
-  invalidateBaselineForEmptyCompletedMap,
+  describeRegionlessCompletedMap,
+  invalidateBaselineForIncompleteCompletedMap,
   mapModeForIngest,
   registerMapCommand,
   requestedMapCoalesceExitCode,
@@ -187,7 +188,7 @@ describe('describeEmptyCompletedMap', () => {
 
   it('invalidates the architecture baseline, including on an unchanged retry', () => {
     const invalidate = vi.fn();
-    const message = invalidateBaselineForEmptyCompletedMap(emptyResult, {
+    const message = invalidateBaselineForIncompleteCompletedMap(emptyResult, {
       filesDiscovered: 260,
       patchesApplied: 0,
       parseErrors: 0,
@@ -207,5 +208,74 @@ describe('describeEmptyCompletedMap', () => {
       parseErrors: 0,
       commitErrors: 0,
     })).toBeDefined();
+  });
+});
+
+describe('describeRegionlessCompletedMap', () => {
+  const cleanIngest = {
+    filesDiscovered: 200,
+    patchesApplied: 200,
+    parseErrors: 0,
+    commitErrors: 0,
+  };
+
+  it('rejects a completed response that counted files but built no regions', () => {
+    const message = describeRegionlessCompletedMap({
+      file_count: 100,
+      region_count: 0,
+      regions: [],
+      outcome: 'full_local_completed',
+    }, cleanIngest);
+
+    expect(message).toContain('produced 0 regions while mapping 100 of 200 supported source files');
+    expect(message).toContain('source ingest baseline was preserved');
+  });
+
+  it('accepts a hierarchy that covers only a minority of discovered files', () => {
+    // #534: a real PHP workspace maps 381 regions' worth of files out of ~7,400
+    // discovered, because .md/.json/.yaml/.css are discovered and never mapped.
+    // A coverage ratio rejects that healthy map on every single run.
+    expect(describeRegionlessCompletedMap({
+      file_count: 381,
+      region_count: 42,
+      regions: [{ id: 'r1' } as any],
+      outcome: 'full_local_completed',
+    }, { ...cleanIngest, filesDiscovered: 7400, patchesApplied: 7400 })).toBeUndefined();
+  });
+
+  it('does not replace an ingest failure with a hierarchy diagnosis', () => {
+    expect(describeRegionlessCompletedMap({
+      file_count: 1,
+      region_count: 0,
+      regions: [],
+      outcome: 'full_local_completed',
+    }, { ...cleanIngest, commitErrors: 1 })).toBeUndefined();
+  });
+
+  it('leaves the empty-map case to its own diagnosis', () => {
+    expect(describeRegionlessCompletedMap({
+      file_count: 0,
+      region_count: 0,
+      regions: [],
+      outcome: 'full_local_completed',
+    }, cleanIngest)).toBeUndefined();
+  });
+
+  it('invalidates only the architecture baseline for a regionless hierarchy', () => {
+    const invalidate = vi.fn();
+    const message = invalidateBaselineForIncompleteCompletedMap({
+      file_count: 1,
+      region_count: 0,
+      regions: [],
+      outcome: 'full_local_completed',
+    }, {
+      filesDiscovered: 2,
+      patchesApplied: 2,
+      parseErrors: 0,
+      commitErrors: 0,
+    }, '/workspace/mixed', invalidate);
+
+    expect(message).toContain('produced 0 regions while mapping 1 of 2');
+    expect(invalidate).toHaveBeenCalledWith('/workspace/mixed');
   });
 });
