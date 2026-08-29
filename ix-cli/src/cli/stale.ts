@@ -2,9 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveWorkspaceRoot } from "./config.js";
 import { loadIngestBaseline } from "./ingest-baseline.js";
+import { hasCurrentMapBaseline } from "./map-baseline.js";
 import { SUPPORTED_EXTENSIONS } from "./supported-extensions.js";
 
 export interface StaleInfo {
+  graphCompleted: boolean;
   mapCompleted: boolean;
   lastIngestAt: string | null;
   currentRev: number;
@@ -91,6 +93,7 @@ export function detectStaleFiles(
   const baseline = loadIngestBaseline(workspaceRoot);
   if (!baseline) {
     return {
+      graphCompleted: false,
       mapCompleted: false,
       lastIngestAt: null,
       currentRev: 0,
@@ -128,7 +131,8 @@ export function detectStaleFiles(
   }
 
   return {
-    mapCompleted: true,
+    graphCompleted: true,
+    mapCompleted: hasCurrentMapBaseline(workspaceRoot, baseline.currentRev),
     lastIngestAt: baseline.lastIngestAt,
     currentRev: baseline.currentRev,
     staleFiles: changedFiles.length,
@@ -139,16 +143,23 @@ export function detectStaleFiles(
 /**
  * Whether the active workspace has a completed map baseline.
  *
- * A baseline is written only by a local ingest that finished with no parse or
- * commit errors, so its absence means one of three things: no map has been run,
- * the initial map committed graph patches but never completed, or the workspace
- * was ingested through the cloud runner, which writes no local baseline. In all
- * three the backend may still answer reads from partially committed data (#506).
- * None of them justify calling an individual file stale — that is a claim about
- * a file having changed — so callers use this to report the *result set* as
- * unverified rather than dressing up every file as modified.
+ * The marker is written only after a non-empty hierarchy response and is tied
+ * to the source revision it mapped. A later clean ingest therefore leaves the
+ * source graph usable while making the prior hierarchy incomplete for the new
+ * revision.
  */
 export function hasCompletedMapBaseline(root?: string): boolean {
+  try {
+    const workspaceRoot = path.resolve(root ?? resolveWorkspaceRoot());
+    const baseline = loadIngestBaseline(workspaceRoot);
+    return baseline !== null && hasCurrentMapBaseline(workspaceRoot, baseline.currentRev);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether source ingestion completed cleanly for the active workspace. */
+export function hasCompletedSourceGraphBaseline(root?: string): boolean {
   try {
     return loadIngestBaseline(path.resolve(root ?? resolveWorkspaceRoot())) !== null;
   } catch {

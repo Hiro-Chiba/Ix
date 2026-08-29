@@ -21,8 +21,8 @@ import { collectFacts, type EntityFacts } from "../explain/facts.js";
 import { llmLine, printLlmLines } from "../llm.js";
 import { parseBudgetOption, parsePickOption, parseRevisionOption } from "../options.js";
 import { resolveFileOrEntity } from "../resolve.js";
-import { createStaleProbe, hasCompletedMapBaseline } from "../stale.js";
-import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure } from "../ui.js";
+import { createStaleProbe, hasCompletedSourceGraphBaseline } from "../stale.js";
+import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure, reportUnresolvedTarget } from "../ui.js";
 
 /** The four `--max-*` knobs that bound a bundle. */
 interface BudgetSnapshot {
@@ -307,7 +307,10 @@ export function registerContextCommand(program: Command): void {
         path: opts.path,
         pick: opts.pick,
       });
-      if (!resolved) return;
+      if (!resolved) {
+        reportUnresolvedTarget(target, opts.format);
+        return;
+      }
 
       const budgets = clampBudgets(opts);
       const asOfRev = opts.asOfRev;
@@ -334,7 +337,7 @@ export function registerContextCommand(program: Command): void {
         asOfRev,
         depth: opts.depth,
         budgets,
-        mapCompleted: hasCompletedMapBaseline(),
+        graphCompleted: hasCompletedSourceGraphBaseline(),
       });
 
       if (opts.save) {
@@ -419,7 +422,7 @@ async function buildFreshBundle(
 
   return buildBundle({
     resolved, facts, context, provenance, asOfRev, depth: opts.depth, budgets,
-    mapCompleted: hasCompletedMapBaseline(),
+    graphCompleted: hasCompletedSourceGraphBaseline(),
   });
 }
 }
@@ -1331,27 +1334,26 @@ interface BuildInput {
    */
   isStale?: (path: string) => boolean;
   /**
-   * Whether the workspace has a completed map baseline. Injected for the same
+   * Whether the workspace has a completed source graph baseline. Injected for the same
    * reason as `isStale`: it is a filesystem question, and buildBundle stays
    * pure under test. Both production callers pass the real answer; the default
    * is the optimistic one so a bundle built from injected facts alone is not
    * silently reclassified.
    */
-  mapCompleted?: boolean;
+  graphCompleted?: boolean;
 }
 
 export function buildBundle(input: BuildInput): ContextBundle {
   const { resolved, facts, context, provenance, asOfRev, depth, budgets } = input;
 
   const stale = facts.stale;
-  // Three states, not two. Without a completed map baseline the backend can
-  // still answer from graph patches an initial map committed before it failed,
-  // and calling that `current` is what let agents trust a half-built graph
-  // (#506). It is not `stale` either — nothing is known to have changed. The
+  // Three states, not two. Without a completed source graph baseline the
+  // backend may still answer from partially committed graph patches. It is not
+  // `stale` either — nothing is known to have changed. The
   // freshness union has carried `unverified` for exactly this case since it was
   // written; this is the first thing to produce it.
-  const mapCompleted = input.mapCompleted ?? true;
-  const classification = !mapCompleted ? "unverified" : stale ? "stale" : "current";
+  const graphCompleted = input.graphCompleted ?? true;
+  const classification = !graphCompleted ? "unverified" : stale ? "stale" : "current";
   const prov = asRecord(provenance);
 
   // Entities: the target itself plus every referenced node, deduped by id and
