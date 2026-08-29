@@ -10,6 +10,7 @@ import { isFileStale } from "../stale.js";
 import { relativePath } from "../format.js";
 import { llmLine, printLlmLines } from "../llm.js";
 import { parsePickOption } from "../options.js";
+import { reportUnresolvedTarget } from "../ui.js";
 
 export interface ReadResult {
   targetType: "file" | "file-range" | "filename-match" | "symbol";
@@ -323,7 +324,7 @@ Examples:
         return;
       }
 
-      stderr(`Could not resolve "${target}" as a file or symbol.`);
+      reportUnresolvedTarget(target, opts.format);
     });
 }
 

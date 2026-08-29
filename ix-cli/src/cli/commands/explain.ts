@@ -11,7 +11,7 @@ import { renderExplanation } from "../explain/render.js";
 import { renderExplainLlm, renderExplainRawLlm } from "../explain/llm.js";
 import { printLlmLines } from "../llm.js";
 import { parsePickOption } from "../options.js";
-import { renderSection, renderWarning, renderNote } from "../ui.js";
+import { renderSection, renderWarning, renderNote, reportUnresolvedTarget } from "../ui.js";
 
 export function registerExplainCommand(program: Command): void {
   program
@@ -27,7 +27,10 @@ export function registerExplainCommand(program: Command): void {
       const client = new IxClient(getEndpoint());
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) return;
+      if (!target) {
+        reportUnresolvedTarget(symbol, opts.format);
+        return;
+      }
 
       if (opts.raw) {
         await rawExplain(client, target, opts.format);
