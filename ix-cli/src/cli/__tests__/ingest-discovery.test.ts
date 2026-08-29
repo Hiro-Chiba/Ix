@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -171,10 +171,13 @@ describe('discovery symlink containment', () => {
 
     const listed = tryGitLsFiles(repo, true);
     expect(listed).not.toBeNull();
-    expect(listed!.sort()).toEqual([
-      join(repo, 'package.json'),
-      join(repo, 'src', 'index.ts'),
-    ].sort());
+    // Basenames, not full paths: `scratchDir` realpaths its temp directory and
+    // `tryGitLsFiles` canonicalizes independently, and on a Windows runner
+    // those disagree on how to spell the same directory (`RUNNER~1` vs
+    // `runneradmin`). Which files survived is the claim; how the path spells
+    // their parent is not.
+    expect(listed!.map((filePath) => basename(filePath)).sort())
+      .toEqual(['index.ts', 'package.json']);
   });
 
   it.skipIf(process.platform === 'win32')(
