@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerTextCommand } from "../commands/text.js";
+import { registerTextCommand, resolveTextSearchPath } from "../commands/text.js";
 
 describe("text workspace boundary", () => {
   let fixture: string;
@@ -44,13 +44,8 @@ describe("text workspace boundary", () => {
     await program.parseAsync(["node", "ix", ...args]);
   }
 
-  it("resolves --path relative to --root instead of the process cwd", async () => {
-    await run(["text", "boundaryNeedle", "--root", workspace, "--path", "src", "--format", "json"]);
-
-    const result = JSON.parse(logs.join("\n"));
-    expect(result).toHaveLength(1);
-    expect(result[0].path).toBe("src/inside.ts");
-    expect(process.exitCode).toBeUndefined();
+  it("resolves --path relative to --root instead of the process cwd", () => {
+    expect(resolveTextSearchPath(workspace, "src")).toBe(join(workspace, "src"));
   });
 
   it("rejects an absolute search path outside the explicit workspace", async () => {

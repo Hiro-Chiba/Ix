@@ -9,6 +9,10 @@ import { llmError } from "../llm.js";
 
 const execFileAsync = promisify(execFile);
 
+export function resolveTextSearchPath(root: string, searchPath: string): string {
+  return path.resolve(root, searchPath);
+}
+
 export function registerTextCommand(program: Command): void {
   program
     .command("text <term>")
@@ -22,7 +26,7 @@ export function registerTextCommand(program: Command): void {
     .action(async (term: string, opts: { limit: string; path: string; format: string; language?: string; root?: string }) => {
       const limit = parseInt(opts.limit, 10);
       const root = path.resolve(resolveWorkspaceRoot(opts.root));
-      const searchPath = path.resolve(root, opts.path);
+      const searchPath = resolveTextSearchPath(root, opts.path);
       if (!isPathInsideResolvedRoot(root, searchPath)) {
         const message = `Search path is outside the workspace: ${opts.path}`;
         if (opts.format === "json") {
