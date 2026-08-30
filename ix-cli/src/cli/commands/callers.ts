@@ -8,12 +8,8 @@ import { formatEdgeResults, relativePath } from "../format.js";
 import { parsePickOption } from "../options.js";
 import { resolveFileOrEntity, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
-import { llmLine, llmError } from "../llm.js";
-
-/** Emit a structured llm error for a failed resolution, or nothing for other formats. */
-function llmUnresolved(format: string, symbol: string): void {
-  if (format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
-}
+import { llmLine } from "../llm.js";
+import { reportUnresolvedTarget } from "../ui.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,7 +27,7 @@ export function registerCallersCommand(program: Command): void {
       const limit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { llmUnresolved(opts.format, symbol); return; }
+      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
       if (opts.format === "text") printResolved(target);
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {
@@ -134,7 +130,7 @@ export function registerCallersCommand(program: Command): void {
       const calleeLimit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { llmUnresolved(opts.format, symbol); return; }
+      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
       if (opts.format === "text") printResolved(target);
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {

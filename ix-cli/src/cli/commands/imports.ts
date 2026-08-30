@@ -3,12 +3,8 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { formatEdgeResults } from "../format.js";
 import { resolveFileOrEntity, printResolved } from "../resolve.js";
-import { llmError } from "../llm.js";
 import { parsePickOption } from "../options.js";
-
-function llmUnresolved(format: string, symbol: string): void {
-  if (format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
-}
+import { reportUnresolvedTarget } from "../ui.js";
 
 export function registerImportsCommand(program: Command): void {
   program
@@ -24,7 +20,7 @@ export function registerImportsCommand(program: Command): void {
       const limit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { llmUnresolved(opts.format, symbol); return; }
+      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] });
       formatEdgeResults(result.nodes.slice(0, limit), "imports", target.name, opts.format, target, "graph");
@@ -43,7 +39,7 @@ export function registerImportsCommand(program: Command): void {
       const limit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { llmUnresolved(opts.format, symbol); return; }
+      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] });
       formatEdgeResults(result.nodes.slice(0, limit), "imported-by", target.name, opts.format, target, "graph");

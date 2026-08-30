@@ -4,8 +4,9 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, printResolved } from "../resolve.js";
 import { relativePath } from "../format.js";
-import { llmLine, llmError } from "../llm.js";
+import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
+import { reportUnresolvedTarget } from "../ui.js";
 
 /** Render an entity's provenance chain as llm records: a header then one `patch` row per revision. */
 export function renderHistoryLlm(
@@ -41,7 +42,7 @@ export function registerHistoryCommand(program: Command): void {
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const resolved = await resolveFileOrEntity(client, target, resolveOpts);
       if (!resolved) {
-        if (opts.format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${target}".`));
+        reportUnresolvedTarget(target, opts.format);
         return;
       }
 

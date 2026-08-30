@@ -4,8 +4,9 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, printResolved, isRawId } from "../resolve.js";
 import { compactTreeNode, relativePath } from "../format.js";
-import { llmLine, llmError } from "../llm.js";
+import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
+import { reportUnresolvedTarget } from "../ui.js";
 
 // ── Tree types ──────────────────────────────────────────────────────
 
@@ -216,7 +217,7 @@ export function registerDependsCommand(program: Command): void {
       };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) {
-        if (opts.format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
+        reportUnresolvedTarget(symbol, opts.format);
         return;
       }
 

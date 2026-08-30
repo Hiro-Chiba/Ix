@@ -4,9 +4,9 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, isRawId, activeReadScope, ensureReadScope } from "../resolve.js";
 import type { ResolvedEntity } from "../resolve.js";
-import { renderSection, renderKeyValue, renderResolvedHeader, colorizeKind } from "../ui.js";
+import { renderSection, renderKeyValue, renderResolvedHeader, colorizeKind, reportUnresolvedTarget } from "../ui.js";
 import { compactTreeNode, relativePath } from "../format.js";
-import { llmLine, llmError, type LlmValue } from "../llm.js";
+import { llmLine, type LlmValue } from "../llm.js";
 import { parsePickOption } from "../options.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -463,7 +463,7 @@ export function registerTraceCommand(program: Command): void {
             resolveFileOrEntity(client, opts.to, toResolveOpts),
           ]);
           if (!fromTarget || !toTarget) {
-            if (opts.format === "llm") console.log(llmError("unresolved_target", `Could not resolve ${!fromTarget ? symbol : opts.to}.`));
+            reportUnresolvedTarget(!fromTarget ? symbol : opts.to, opts.format);
             return;
           }
 
@@ -541,7 +541,7 @@ export function registerTraceCommand(program: Command): void {
         // ── Directional mode ────────────────────────────────────────
         const resolvedTarget = await resolveFileOrEntity(client, symbol, resolveOpts);
         if (!resolvedTarget) {
-          if (opts.format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
+          reportUnresolvedTarget(symbol, opts.format);
           return;
         }
         let target: ResolvedEntity = resolvedTarget;

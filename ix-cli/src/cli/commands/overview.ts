@@ -5,9 +5,9 @@ import { resolveFileOrEntity, printResolved } from "../resolve.js";
 import { getEffectiveSystemPath, getSystemPath, hasMapData } from "../hierarchy.js";
 import { humanizeLabel } from "../impact/risk-semantics.js";
 import { relativePath } from "../format.js";
-import { llmLine, llmError, type LlmValue } from "../llm.js";
+import { llmLine, type LlmValue } from "../llm.js";
 import { parsePickOption } from "../options.js";
-import { renderSection, renderKeyValue, renderNote, renderBreadcrumb } from "../ui.js";
+import { renderSection, renderKeyValue, renderNote, renderBreadcrumb, reportUnresolvedTarget } from "../ui.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
 const STRUCTURAL_CONTAINER_KINDS = new Set(["class", "object", "trait", "interface"]);
@@ -58,8 +58,7 @@ Examples:
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) {
-        // Resolver printed human guidance to stderr; add a structured record for llm.
-        if (opts.format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
+        reportUnresolvedTarget(symbol, opts.format);
         return;
       }
 

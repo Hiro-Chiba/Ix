@@ -43,6 +43,16 @@ describe("unresolved targets in machine formats", () => {
     ["context", async () => (await import("../commands/context.js")).registerContextCommand],
     ["explain", async () => (await import("../commands/explain.js")).registerExplainCommand],
     ["read", async () => (await import("../commands/read.js")).registerReadCommand],
+    ["overview", async () => (await import("../commands/overview.js")).registerOverviewCommand],
+    ["impact", async () => (await import("../commands/impact.js")).registerImpactCommand],
+    ["contains", async () => (await import("../commands/contains.js")).registerContainsCommand],
+    ["callers", async () => (await import("../commands/callers.js")).registerCallersCommand],
+    ["callees", async () => (await import("../commands/callers.js")).registerCallersCommand],
+    ["imports", async () => (await import("../commands/imports.js")).registerImportsCommand],
+    ["imported-by", async () => (await import("../commands/imports.js")).registerImportsCommand],
+    ["depends", async () => (await import("../commands/depends.js")).registerDependsCommand],
+    ["trace", async () => (await import("../commands/trace.js")).registerTraceCommand],
+    ["history", async () => (await import("../commands/history.js")).registerHistoryCommand],
   ] as const)("returns JSON and a non-zero status from ix %s", async (command, loadRegister) => {
     const result = await run(await loadRegister(), [command, "DefinitelyMissing", "--format", "json"]);
 

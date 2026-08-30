@@ -4,7 +4,7 @@ import { getEndpoint } from "../config.js";
 import { formatEdgeResults } from "../format.js";
 import { parsePickOption } from "../options.js";
 import { resolveFileOrEntity, printResolved } from "../resolve.js";
-import { llmError } from "../llm.js";
+import { reportUnresolvedTarget } from "../ui.js";
 
 export function registerContainsCommand(program: Command): void {
   program
@@ -22,7 +22,7 @@ export function registerContainsCommand(program: Command): void {
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) {
-        if (opts.format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
+        reportUnresolvedTarget(symbol, opts.format);
         return;
       }
       if (opts.format === "text") printResolved(target);
