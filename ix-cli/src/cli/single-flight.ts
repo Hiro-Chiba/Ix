@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync, readFileSync, rmSync, openSync, closeSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, openSync, closeSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { homedir, hostname } from "node:os";
 import { createHash } from "node:crypto";
 
@@ -54,7 +54,10 @@ function lockMaxMs(): number {
 }
 
 function lockPathFor(key: string): string {
-  const h = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  let canonicalKey: string;
+  try { canonicalKey = realpathSync.native(key); }
+  catch { canonicalKey = resolve(key); }
+  const h = createHash("sha256").update(canonicalKey).digest("hex").slice(0, 16);
   return join(lockDir(), `map-${h}.lock`);
 }
 
