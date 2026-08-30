@@ -1,4 +1,4 @@
-import { InvalidArgumentError } from "commander";
+import { InvalidArgumentError, type Command, type Option } from "commander";
 
 /**
  * Parse a flag that must be a positive integer, rejecting anything else.
@@ -21,6 +21,71 @@ function parsePositiveInt(value: string, example: string): number {
   const parsed = Number(normalized);
   if (!Number.isSafeInteger(parsed)) throw reject();
   return parsed;
+}
+
+function parseNonNegativeInt(value: string, example: string): number {
+  const normalized = value.trim();
+  const reject = () =>
+    new InvalidArgumentError(`must be a non-negative integer (for example, ${example})`);
+  if (!/^\+?\d+$/.test(normalized)) throw reject();
+
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed)) throw reject();
+  return parsed;
+}
+
+function documentedChoices(option: Option, command: Command): string[] | null {
+  const group = option.description.match(/\(([^()]*(?:\|)[^()]*)\)/)?.[1];
+  if (!group) return null;
+  const choices = group.split("|").map((choice) => choice.trim());
+  if (option.long === "--format" && command.name() === "map") choices.push("silent");
+  return choices;
+}
+
+function invalidOption(option: Option, detail: string): InvalidArgumentError {
+  return new InvalidArgumentError(`option '${option.long}' ${detail}`);
+}
+
+/**
+ * Validate common option domains before a command can contact the backend.
+ *
+ * Most commands read numeric options with `parseInt` and route any unrecognized
+ * output format through their text branch. That turns typos into a different,
+ * successful request. Keeping this at the root command covers OSS and optional
+ * Pro commands consistently, including the long-lived MCP runner.
+ */
+export function validateCliOptions(command: Command): void {
+  const values = command.opts();
+
+  for (const option of command.options) {
+    const value = values[option.attributeName()];
+    if (value === undefined || value === null) continue;
+
+    if (typeof value === "string") {
+      const choices = documentedChoices(option, command);
+      if (choices && !choices.includes(value)) {
+        throw invalidOption(option, `must be one of: ${choices.join(", ")}`);
+      }
+
+      if (option.long === "--as-of") {
+        try { parseRevisionOption(value); }
+        catch { throw invalidOption(option, "must be a positive integer"); }
+      }
+
+      if (option.long === "--min-confidence") {
+        const parsed = Number(value);
+        if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(value.trim()) || parsed < 0 || parsed > 1) {
+          throw invalidOption(option, "must be a number from 0 to 1");
+        }
+      } else if (option.long === "--offset") {
+        try { parseNonNegativeInt(value, "0 or 10"); }
+        catch { throw invalidOption(option, "must be a non-negative integer"); }
+      } else if (option.flags.includes("<n>")) {
+        try { parsePositiveInt(value, "1 or 10"); }
+        catch { throw invalidOption(option, "must be a positive integer"); }
+      }
+    }
+  }
 }
 
 export function parsePickOption(value: string): number {

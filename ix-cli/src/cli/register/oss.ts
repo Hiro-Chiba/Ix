@@ -37,6 +37,7 @@ import { registerSavingsCommand } from "../commands/savings.js";
 import { registerPatchesCommand } from "../commands/patches.js";
 import { registerMcpCommand } from "../commands/mcp.js";
 import { registerContextCommand } from "../commands/context.js";
+import { validateCliOptions } from "../options.js";
 
 const PRO_COMMANDS: { name: string; desc: string }[] = [
   { name: "briefing", desc: "Session-resume briefing" },
@@ -104,6 +105,10 @@ export function registerOssCommands(program: Command): void {
   registerPatchesCommand(program);
   registerMcpCommand(program);
   registerContextCommand(program);
+
+  program.hook("preAction", (_thisCommand, actionCommand) => {
+    validateCliOptions(actionCommand);
+  });
 
   // Hide advanced commands from default help
   const advancedSet = new Set(ADVANCED_COMMANDS);
