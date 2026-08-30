@@ -265,7 +265,13 @@ jobs:
           # The converse, and the regression guard for #518: in a directory no
           # workspace covers, doctor must say so instead of passing every check
           # against whichever workspace happens to be the default.
-          echo "::group::doctor (unmapped cwd)"; (cd "$RUNNER_TEMP" && $IX doctor --format json) | tee doctor-unmapped.json; echo "::endgroup::"
+          echo "::group::doctor (unmapped cwd)"
+          set +e
+          (cd "$RUNNER_TEMP" && $IX doctor --format json) | tee doctor-unmapped.json
+          doctor_exit=${PIPESTATUS[0]}
+          set -e
+          if [ "$doctor_exit" -ne 1 ]; then echo "expected doctor to exit 1 for an unmapped cwd, got $doctor_exit"; exit 1; fi
+          echo "::endgroup::"
           node -e "const d=require('./doctor-unmapped.json');const c=(d.checks||[]).find(c=>c.name==='Workspace for this directory');if(!c){console.error('no workspace check in doctor output');process.exit(1)}if(c.ok||d.healthy){console.error('doctor reported healthy in a directory with no workspace');process.exit(1)}console.log('unmapped cwd reported:',c.detail)"
 
       - name: Backend logs on failure
