@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import path from "node:path";
 import type { Command } from "commander";
 import { formatTextResults, type TextResult } from "../format.js";
-import { resolveWorkspaceRoot } from "../config.js";
+import { isPathInsideResolvedRoot, resolveWorkspaceRoot } from "../config.js";
 import { stderr } from "../stderr.js";
+import { llmError } from "../llm.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,7 +21,20 @@ export function registerTextCommand(program: Command): void {
     .addHelpText("after", "\nExamples:\n  ix text verify_token --language python\n  ix text \"class.*Service\" --limit 10 --format json\n  ix text TODO --path src/")
     .action(async (term: string, opts: { limit: string; path: string; format: string; language?: string; root?: string }) => {
       const limit = parseInt(opts.limit, 10);
-      const searchPath = opts.path !== "." ? opts.path : resolveWorkspaceRoot(opts.root);
+      const root = path.resolve(resolveWorkspaceRoot(opts.root));
+      const searchPath = path.resolve(root, opts.path);
+      if (!isPathInsideResolvedRoot(root, searchPath)) {
+        const message = `Search path is outside the workspace: ${opts.path}`;
+        if (opts.format === "json") {
+          console.log(JSON.stringify({ error: "path_outside_workspace", message }, null, 2));
+        } else if (opts.format === "llm") {
+          console.log(llmError("path_outside_workspace", message));
+        } else {
+          stderr(`Error: ${message}`);
+        }
+        process.exitCode = 1;
+        return;
+      }
       try {
         const rgArgs = [
           "--json",
@@ -44,9 +59,12 @@ export function registerTextCommand(program: Command): void {
             if (parsed.type === "match") {
               const data = parsed.data;
               const filePath = data.path?.text ?? "";
+              const absoluteFilePath = path.isAbsolute(filePath)
+                ? filePath
+                : path.resolve(process.cwd(), filePath);
               const lineNum = data.line_number ?? 0;
               results.push({
-                path: filePath,
+                path: path.relative(root, absoluteFilePath),
                 line_start: lineNum,
                 line_end: lineNum,
                 snippet: data.lines?.text ?? "",
