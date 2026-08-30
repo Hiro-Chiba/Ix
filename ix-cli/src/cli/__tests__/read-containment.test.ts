@@ -17,6 +17,7 @@ let workspace: string;
 let outside: string;
 let savedHome: string | undefined;
 let savedProfile: string | undefined;
+let savedExitCode: number | string | undefined;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ix-read-home-"));
@@ -24,6 +25,8 @@ beforeEach(() => {
   outside = mkdtempSync(join(tmpdir(), "ix-read-outside-"));
   savedHome = process.env.HOME;
   savedProfile = process.env.USERPROFILE;
+  savedExitCode = process.exitCode;
+  process.exitCode = undefined;
   process.env.HOME = home;
   process.env.USERPROFILE = home;
 
@@ -40,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
   if (savedProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedProfile;
+  process.exitCode = savedExitCode;
   for (const dir of [home, workspace, outside]) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -146,20 +150,27 @@ describe("ix read enforces the boundary", () => {
     expect(out).toContain("export const answer = 42;");
   });
 
-  it("refuses a file outside it, and emits no content", async () => {
+  it("refuses a file outside it without emitting source content", async () => {
     const { out, err } = await runRead(join(outside, "secret.txt"), workspace);
-    // The refusal names the boundary; an agent that cannot see it just retries.
-    expect(err).toContain("Refusing to read file outside the workspace");
-    expect(err).toContain("allowed root:");
+    expect(JSON.parse(out)).toMatchObject({ error: "path_outside_workspace" });
+    expect(process.exitCode).toBe(1);
+    expect(err).toBe("");
     expect(out).not.toContain("SENTINEL");
-    expect(out).toBe("");
   });
 
   it("refuses a symlink inside the workspace that points outside it", async () => {
     const link = join(workspace, "src", "escape.txt");
     symlinkSync(join(outside, "secret.txt"), link);
-    const { out, err } = await runRead(link, workspace);
-    expect(err).toContain("Refusing to read file outside the workspace");
+    const { out } = await runRead(link, workspace);
+    expect(JSON.parse(out)).toMatchObject({ error: "path_outside_workspace" });
+    expect(process.exitCode).toBe(1);
     expect(out).not.toContain("SENTINEL");
+  });
+
+  it.each(["src/main.ts:0-0", "src/main.ts:5-2"])("rejects invalid line range %s", async (target) => {
+    const { out } = await runRead(target, workspace);
+    expect(JSON.parse(out)).toMatchObject({ error: "invalid_line_range" });
+    expect(process.exitCode).toBe(1);
+    expect(out).not.toContain("export const answer");
   });
 });
