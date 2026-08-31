@@ -12,6 +12,7 @@ describe("text workspace boundary", () => {
   let originalCwd: string;
   let originalExitCode: number | string | undefined;
   let logs: string[];
+  let runRipgrep: ReturnType<typeof vi.fn<(args: string[]) => Promise<{ stdout: string }>>>;
 
   beforeEach(() => {
     fixture = mkdtempSync(join(tmpdir(), "ix-text-boundary-"));
@@ -29,6 +30,16 @@ describe("text workspace boundary", () => {
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       logs.push(args.join(" "));
     });
+    runRipgrep = vi.fn(async () => ({
+      stdout: JSON.stringify({
+        type: "match",
+        data: {
+          path: { text: join(workspace, "src", "inside.ts") },
+          line_number: 1,
+          lines: { text: "export const boundaryNeedle = true;\n" },
+        },
+      }),
+    }));
   });
 
   afterEach(() => {
@@ -40,12 +51,18 @@ describe("text workspace boundary", () => {
 
   async function run(args: string[]): Promise<void> {
     const program = new Command();
-    registerTextCommand(program);
+    registerTextCommand(program, runRipgrep);
     await program.parseAsync(["node", "ix", ...args]);
   }
 
-  it("resolves --path relative to --root instead of the process cwd", () => {
+  it("resolves --path relative to --root instead of the process cwd", async () => {
     expect(resolveTextSearchPath(workspace, "src")).toBe(join(workspace, "src"));
+
+    await run(["text", "boundaryNeedle", "--root", workspace, "--path", "src", "--format", "json"]);
+
+    expect(runRipgrep).toHaveBeenCalledWith(expect.arrayContaining(["boundaryNeedle", join(workspace, "src")]));
+    expect(JSON.parse(logs.join("\n"))).toMatchObject([{ path: "src/inside.ts" }]);
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("rejects an absolute search path outside the explicit workspace", async () => {

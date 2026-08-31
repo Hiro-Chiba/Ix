@@ -9,16 +9,22 @@ import { llmError } from "../llm.js";
 
 const execFileAsync = promisify(execFile);
 
+type RunRipgrep = (args: string[]) => Promise<{ stdout: string }>;
+
+async function runRipgrep(args: string[]): Promise<{ stdout: string }> {
+  return execFileAsync("rg", args, { maxBuffer: 10 * 1024 * 1024 });
+}
+
 export function resolveTextSearchPath(root: string, searchPath: string): string {
   return path.resolve(root, searchPath);
 }
 
-export function registerTextCommand(program: Command): void {
+export function registerTextCommand(program: Command, executeRipgrep: RunRipgrep = runRipgrep): void {
   program
     .command("text <term>")
     .description("Fast lexical/text search across the codebase (uses ripgrep)")
     .option("--limit <n>", "Max results", "20")
-    .option("--path <dir>", "Restrict search to a directory", ".")
+    .option("--path <dir>", "Restrict search to a workspace-relative directory", ".")
     .option("--language <lang>", "Filter by language (python, typescript, scala, etc.)")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .option("--root <dir>", "Workspace root directory")
@@ -53,7 +59,7 @@ export function registerTextCommand(program: Command): void {
 
         rgArgs.push(term, searchPath);
 
-        const { stdout } = await execFileAsync("rg", rgArgs, { maxBuffer: 10 * 1024 * 1024 });
+        const { stdout } = await executeRipgrep(rgArgs);
 
         const results: TextResult[] = [];
         for (const line of stdout.split("\n")) {
