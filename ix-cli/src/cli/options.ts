@@ -58,7 +58,15 @@ export function validateCliOptions(command: Command): void {
   const values = command.opts();
 
   for (const option of command.options) {
-    const value = values[option.attributeName()];
+    const name = option.attributeName();
+    // Only what the caller actually typed. A default is the command author's
+    // own choice, and checking it turns a mismatch into a command nobody can
+    // run: `ix smells` defaults `--orphan-max-connections` to 0, which the
+    // `<n>` rule below rejected, so the command failed before its action ever
+    // started -- on no arguments at all. Anything the author ships as a
+    // default is by definition a value the command accepts.
+    if (command.getOptionValueSource(name) !== "cli") continue;
+    const value = values[name];
     if (value === undefined || value === null) continue;
 
     if (typeof value === "string") {
@@ -77,12 +85,16 @@ export function validateCliOptions(command: Command): void {
         if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(value.trim()) || parsed < 0 || parsed > 1) {
           throw invalidOption(option, "must be a number from 0 to 1");
         }
-      } else if (option.long === "--offset") {
+      } else if (option.flags.includes("<n>")) {
+        // Non-negative, not positive. 0 is a documented value for several of
+        // these -- `--offset 0`, `--orphan-max-connections 0` (its own
+        // default), `--weak-max-neighbors 0` -- and none of the typos this
+        // exists to catch survive either rule: `1e3`, `10abc`, `0x10`, `-5`
+        // and `abc` are all rejected. The flags that genuinely mean "at least
+        // one" declare `parsePositiveInt` as their own commander parser
+        // (`--pick`), so commander still rejects 0 for them at parse time.
         try { parseNonNegativeInt(value, "0 or 10"); }
         catch { throw invalidOption(option, "must be a non-negative integer"); }
-      } else if (option.flags.includes("<n>")) {
-        try { parsePositiveInt(value, "1 or 10"); }
-        catch { throw invalidOption(option, "must be a positive integer"); }
       }
     }
   }

@@ -21,7 +21,7 @@ describe("common CLI option validation", () => {
     [["doctor", "--format", "yaml"], "--format"],
     [["inventory", "--kind", "file", "--limit", "1e3"], "--limit"],
     [["rank", "--by", "dependents", "--kind", "class", "--top", "10abc"], "--top"],
-    [["patches", "--limit", "0"], "--limit"],
+    [["patches", "--limit", "-1"], "--limit"],
     [["search", "term", "--as-of", "abc"], "--as-of"],
     [["search", "term", "--as-of", "1e3"], "--as-of"],
     [["map", "--level", "nope"], "--level"],
@@ -40,6 +40,9 @@ describe("common CLI option validation", () => {
     ["map", "--format", "silent"],
     ["map", "--min-confidence", "0.75"],
     ["subsystems", "--offset", "0"],
+    // 0 is this flag's own default, so rejecting it was incoherent.
+    ["smells", "--orphan-max-connections", "0"],
+    ["smells", "--weak-max-neighbors", "0"],
   ] as const)("accepts the documented value in %j", (command, option, value) => {
     const program = new Command();
     program.name("ix");
@@ -49,4 +52,21 @@ describe("common CLI option validation", () => {
 
     expect(() => validateCliOptions(action)).not.toThrow();
   });
+
+  // The regression this hook shipped with: it read every option's *default*
+  // through `command.opts()`, so a command whose own default fell outside the
+  // rule could not be run at all. `ix smells` defaults
+  // --orphan-max-connections to "0" and died on `ix smells` with no arguments.
+  it.each(["smells", "map", "subsystems", "rank", "inventory", "patches", "doctor", "status", "context"])(
+    "runs %s on its defaults alone",
+    (command) => {
+      const program = new Command();
+      program.name("ix");
+      registerOssCommands(program);
+      const action = program.commands.find((candidate) => candidate.name() === command)!;
+      action.parseOptions([]);
+
+      expect(() => validateCliOptions(action)).not.toThrow();
+    },
+  );
 });
