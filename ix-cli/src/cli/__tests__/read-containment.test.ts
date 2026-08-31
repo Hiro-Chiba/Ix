@@ -128,7 +128,7 @@ describe("isReadablePath", () => {
 // it — delete the guard call sites and everything above still passes, because a
 // helper nobody calls is still a correct helper.
 describe("ix read enforces the boundary", () => {
-  async function runRead(target: string, root: string): Promise<{ out: string; err: string }> {
+  async function runRead(target: string, root: string, format = "json"): Promise<{ out: string; err: string }> {
     const out: string[] = [];
     const err: string[] = [];
     const log = vi.spyOn(console, "log").mockImplementation((...a) => { out.push(a.join(" ")); });
@@ -137,7 +137,7 @@ describe("ix read enforces the boundary", () => {
       const program = new Command();
       program.exitOverride();
       registerReadCommand(program);
-      await program.parseAsync(["read", target, "--root", root, "--format", "json"], { from: "user" });
+      await program.parseAsync(["read", target, "--root", root, "--format", format], { from: "user" });
       return { out: out.join("\n"), err: err.join("") };
     } finally {
       log.mockRestore();
@@ -170,6 +170,28 @@ describe("ix read enforces the boundary", () => {
   it.each(["src/main.ts:0-0", "src/main.ts:5-2"])("rejects invalid line range %s", async (target) => {
     const { out } = await runRead(target, workspace);
     expect(JSON.parse(out)).toMatchObject({ error: "invalid_line_range" });
+    expect(process.exitCode).toBe(1);
+    expect(out).not.toContain("export const answer");
+  });
+
+  // The text branch is the only one that still names the boundary, and routing
+  // the machine formats to stdout left it as the sole caller of readableRoots().
+  // Nothing else covers it, so a change to either would go unnoticed.
+  it("names the boundary on stderr for text output, and still emits no content", async () => {
+    const { out, err } = await runRead(join(outside, "secret.txt"), workspace, "text");
+
+    expect(err).toContain("Refusing to read file outside the workspace");
+    expect(err).toContain("allowed root:");
+    expect(err).toContain(workspace);
+    expect(process.exitCode).toBe(1);
+    expect(out).toBe("");
+    expect(err).not.toContain("SENTINEL");
+  });
+
+  it("reports an invalid line range on stderr for text output", async () => {
+    const { out, err } = await runRead("src/main.ts:5-2", workspace, "text");
+
+    expect(err).toContain("Invalid line range");
     expect(process.exitCode).toBe(1);
     expect(out).not.toContain("export const answer");
   });
