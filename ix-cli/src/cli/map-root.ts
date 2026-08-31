@@ -1,29 +1,6 @@
-import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { findWorkspaceForCwd } from "./config.js";
-
-export function selectMapRootCandidate(
-  pathArg: string | undefined,
-  cwd: string,
-  registeredRoot?: string,
-  gitRoot?: string,
-): string {
-  if (pathArg) return resolve(cwd, pathArg);
-  return registeredRoot ?? gitRoot ?? cwd;
-}
-
-function findGitRoot(cwd: string): string | undefined {
-  try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
+import { resolveWorkspaceRoot } from "./config.js";
 
 export function canonicalMapRoot(candidate: string): string {
   const resolved = resolve(candidate);
@@ -40,7 +17,6 @@ export function canonicalMapRoot(candidate: string): string {
 }
 
 export function resolveMapRoot(pathArg?: string, cwd = process.cwd()): string {
-  const registeredRoot = pathArg ? undefined : findWorkspaceForCwd(cwd)?.root_path;
-  const gitRoot = pathArg || registeredRoot ? undefined : findGitRoot(cwd);
-  return canonicalMapRoot(selectMapRootCandidate(pathArg, cwd, registeredRoot, gitRoot));
+  const candidate = pathArg ? resolve(cwd, pathArg) : resolveWorkspaceRoot(undefined, cwd);
+  return canonicalMapRoot(candidate);
 }
