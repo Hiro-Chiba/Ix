@@ -66,6 +66,28 @@ const ADVANCED_COMMANDS = [
   "init", "ingest",
 ];
 
+const DEFAULT_FORMAT_CHOICES = ["text", "json", "llm"];
+const OPTION_CHOICES: Record<string, Record<string, string[]>> = {
+  query: { depth: ["shallow", "standard", "deep"], format: ["text", "json"] },
+  map: { format: [...DEFAULT_FORMAT_CHOICES, "silent"], sort: ["importance", "confidence", "size", "alpha"] },
+  subsystems: { sort: ["importance", "confidence", "size", "alpha"] },
+  savings: { model: ["opus", "sonnet", "haiku", "gpt-4o"] },
+  context: { depth: ["compact", "standard", "full", "shallow", "deep"] },
+};
+
+function configureOssOptionChoices(root: Command): void {
+  const visit = (command: Command): void => {
+    const commandChoices = OPTION_CHOICES[command.name()] ?? {};
+    for (const option of command.options) {
+      const choices = commandChoices[option.attributeName()]
+        ?? (option.long === "--format" ? DEFAULT_FORMAT_CHOICES : undefined);
+      if (choices) option.choices(choices);
+    }
+    for (const child of command.commands) visit(child);
+  };
+  visit(root);
+}
+
 export function registerOssCommands(program: Command): void {
   registerQueryCommand(program);
   registerIngestCommand(program);
@@ -105,6 +127,8 @@ export function registerOssCommands(program: Command): void {
   registerPatchesCommand(program);
   registerMcpCommand(program);
   registerContextCommand(program);
+
+  configureOssOptionChoices(program);
 
   program.hook("preAction", (_thisCommand, actionCommand) => {
     validateCliOptions(actionCommand);

@@ -17,6 +17,40 @@ async function parseInvalid(args: string[]): Promise<unknown> {
 }
 
 describe("common CLI option validation", () => {
+  it("declares every documented enum as Commander choices", () => {
+    const program = new Command();
+    program.name("ix");
+    registerOssCommands(program);
+    const pending = [...program.commands];
+
+    while (pending.length > 0) {
+      const command = pending.shift()!;
+      pending.push(...command.commands);
+      for (const option of command.options) {
+        const group = option.description.match(/\(([^()]*(?:\|)[^()]*)\)/)?.[1];
+        if (!group) continue;
+        expect(option.argChoices, `${command.name()} ${option.long}`).toEqual(
+          group.split("|").map((choice) => choice.trim()),
+        );
+      }
+    }
+  });
+
+  it("does not make a later Pro command's help text an implicit runtime contract", async () => {
+    const program = new Command();
+    program.name("ix");
+    registerOssCommands(program);
+    let received: string | undefined;
+    program
+      .command("pro-test")
+      .option("--mode <mode>", "Presentation mode (short|full)")
+      .action((options: { mode?: string }) => { received = options.mode; });
+
+    await program.parseAsync(["pro-test", "--mode", "custom"], { from: "user" });
+
+    expect(received).toBe("custom");
+  });
+
   it.each([
     [["doctor", "--format", "yaml"], "--format"],
     [["inventory", "--kind", "file", "--limit", "1e3"], "--limit"],

@@ -34,14 +34,6 @@ function parseNonNegativeInt(value: string, example: string): number {
   return parsed;
 }
 
-function documentedChoices(option: Option, command: Command): string[] | null {
-  const group = option.description.match(/\(([^()]*(?:\|)[^()]*)\)/)?.[1];
-  if (!group) return null;
-  const choices = group.split("|").map((choice) => choice.trim());
-  if (option.long === "--format" && command.name() === "map") choices.push("silent");
-  return choices;
-}
-
 function invalidOption(option: Option, detail: string): InvalidArgumentError {
   return new InvalidArgumentError(`option '${option.long}' ${detail}`);
 }
@@ -70,11 +62,6 @@ export function validateCliOptions(command: Command): void {
     if (value === undefined || value === null) continue;
 
     if (typeof value === "string") {
-      const choices = documentedChoices(option, command);
-      if (choices && !choices.includes(value)) {
-        throw invalidOption(option, `must be one of: ${choices.join(", ")}`);
-      }
-
       if (option.long === "--as-of") {
         try { parseRevisionOption(value); }
         catch { throw invalidOption(option, "must be a positive integer"); }

@@ -259,7 +259,7 @@ export function registerMapCommand(program: Command): void {
   program
     .command("map [path]")
     .description("Map the architectural hierarchy of a codebase")
-    .option("--format <fmt>", "Output format (text|json|llm)", "text")
+    .option("--format <fmt>", "Output format (text|json|llm|silent)", "text")
     .option("--level <n>", "Show only regions at this level (1=finest, higher=coarser)")
     .option("--min-confidence <n>", "Only show regions above this confidence threshold (0-1)", "0")
     .option("--max-items <n>", "Max items to show per section in text output (default: 10)", "10")
