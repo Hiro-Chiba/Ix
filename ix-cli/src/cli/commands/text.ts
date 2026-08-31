@@ -74,7 +74,7 @@ export function registerTextCommand(program: Command, executeRipgrep: RunRipgrep
                 : path.resolve(process.cwd(), filePath);
               const lineNum = data.line_number ?? 0;
               results.push({
-                path: path.relative(root, absoluteFilePath),
+                path: path.relative(root, absoluteFilePath).split(path.sep).join("/"),
                 line_start: lineNum,
                 line_end: lineNum,
                 snippet: data.lines?.text ?? "",
