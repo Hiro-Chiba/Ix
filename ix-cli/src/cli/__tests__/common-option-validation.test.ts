@@ -51,6 +51,34 @@ describe("common CLI option validation", () => {
     expect(received).toBe("custom");
   });
 
+  // Same reasoning, one step further: the preAction hook lives on the root
+  // program, so it fires for Pro commands too. The `<n>` rule is a claim about
+  // option declarations in *this* repo -- a Pro flag that spells a float or a
+  // negative `<n>` would be rejected by a rule its author never opted into.
+  it("does not apply the numeric rules to a later Pro command's options", async () => {
+    const program = new Command();
+    program.name("ix").exitOverride();
+    registerOssCommands(program);
+    const received: Record<string, string | undefined> = {};
+    program
+      .command("pro-numeric")
+      .option("--threshold <n>", "Similarity threshold")
+      .option("--min-confidence <n>", "Confidence floor")
+      .option("--as-of <rev>", "Revision")
+      .action((options: { threshold?: string; minConfidence?: string; asOf?: string }) => {
+        received.threshold = options.threshold;
+        received.minConfidence = options.minConfidence;
+        received.asOf = options.asOf;
+      });
+
+    await program.parseAsync(
+      ["pro-numeric", "--threshold", "0.8", "--min-confidence", "7", "--as-of", "HEAD~2"],
+      { from: "user" },
+    );
+
+    expect(received).toEqual({ threshold: "0.8", minConfidence: "7", asOf: "HEAD~2" });
+  });
+
   it.each([
     [["doctor", "--format", "yaml"], "--format"],
     [["inventory", "--kind", "file", "--limit", "1e3"], "--limit"],

@@ -75,8 +75,17 @@ const OPTION_CHOICES: Record<string, Record<string, string[]>> = {
   context: { depth: ["compact", "standard", "full", "shallow", "deep"] },
 };
 
+/**
+ * Every command this file registered, so the preAction hook below can tell an
+ * OSS option from a Pro one. Pro commands are registered later, against the
+ * same root program, from a package this repo cannot see -- so their option
+ * domains are not ours to infer.
+ */
+const ossCommands = new WeakSet<Command>();
+
 function configureOssOptionChoices(root: Command): void {
   const visit = (command: Command): void => {
+    ossCommands.add(command);
     const commandChoices = OPTION_CHOICES[command.name()] ?? {};
     for (const option of command.options) {
       const choices = commandChoices[option.attributeName()]
@@ -131,6 +140,12 @@ export function registerOssCommands(program: Command): void {
   configureOssOptionChoices(program);
 
   program.hook("preAction", (_thisCommand, actionCommand) => {
+    // OSS commands only. The rules below read an option's *shape* -- `<n>`
+    // means a non-negative integer, `--min-confidence` means 0..1 -- which is
+    // a claim about commands whose declarations live in this repo. A Pro
+    // command declaring `--threshold <n>` for a float would be rejected by a
+    // rule its author never opted into, and no test here could catch it.
+    if (!ossCommands.has(actionCommand)) return;
     validateCliOptions(actionCommand);
   });
 
