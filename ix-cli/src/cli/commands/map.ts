@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { type Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
@@ -14,6 +13,7 @@ import { acquireMapLock } from "../single-flight.js";
 import { canRenderProgress } from "../stderr.js";
 import { loadIngestBaseline } from "../ingest-baseline.js";
 import { saveMapBaseline } from "../map-baseline.js";
+import { resolveMapRoot } from "../map-root.js";
 
 // Hard wall-clock budget for a single `ix map`. Past this, the shared deadline
 // signal aborts every in-flight request and the command exits, so a single
@@ -346,7 +346,21 @@ Examples:
   ix map . --full --verbose`
     )
     .action(async (pathArg: string | undefined, opts: { format: string; level?: string; minConfidence: string; maxItems: string; allItems?: boolean; sort: string; graph?: boolean; list?: boolean; full?: boolean; verbose?: boolean; silent?: boolean }) => {
-      const cwd = pathArg ? resolve(pathArg) : process.cwd();
+      let cwd: string;
+      try {
+        cwd = resolveMapRoot(pathArg);
+      } catch (err: any) {
+        const message = err?.message ?? "Invalid map path";
+        if (opts.format === "json") {
+          console.log(JSON.stringify({ error: "invalid_map_path", message }, null, 2));
+        } else if (opts.format === "llm") {
+          console.log(llmError("invalid_map_path", message));
+        } else {
+          console.error(chalk.red("Error:"), message);
+        }
+        process.exitCode = 1;
+        return;
+      }
 
       const silent = opts.silent === true || opts.format === "silent";
 
