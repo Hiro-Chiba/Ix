@@ -224,6 +224,16 @@ export function isPathInside(root: string, candidate: string): boolean {
 }
 
 /**
+ * Is a path contained by one specific root after resolving symlinks on both
+ * sides? This is stricter than `isReadablePath`, which deliberately allows all
+ * registered workspace roots for cross-workspace reads.
+ */
+export function isPathInsideResolvedRoot(root: string, candidate: string): boolean {
+  const real = (p: string) => { try { return realpathSync(p); } catch { return resolvePath(p); } };
+  return isPathInside(root, candidate) && isPathInside(real(root), real(candidate));
+}
+
+/**
  * The roots a read command may open a file from: the workspace this invocation
  * resolves to, plus every workspace the user has registered with `ix init`.
  *
@@ -248,10 +258,8 @@ export function readableRoots(explicitRoot?: string): string[] {
  * path stands in, which is the same answer for everything that is not a link.
  */
 export function isReadablePath(candidate: string, explicitRoot?: string): boolean {
-  const real = (p: string) => { try { return realpathSync(p); } catch { return resolvePath(p); } };
-  const realCandidate = real(candidate);
   return readableRoots(explicitRoot).some(
-    root => isPathInside(root, candidate) && isPathInside(real(root), realCandidate),
+    root => isPathInsideResolvedRoot(root, candidate),
   );
 }
 
