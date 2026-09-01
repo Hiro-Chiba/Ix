@@ -325,13 +325,25 @@ export function resolveWorkspaceRoot(explicitRoot?: string, cwd = process.cwd())
   const defaultWs = getDefaultWorkspace();
   if (defaultWs) return defaultWs.root_path;
   // 5. Git root
+  const gitRoot = gitRootFor(cwd);
+  if (gitRoot) return gitRoot;
+  // 6. cwd fallback
+  return cwd;
+}
+
+/**
+ * The git top-level containing `cwd`, or undefined outside a repository.
+ *
+ * stderr is discarded: outside a repo git writes "fatal: not a git repository"
+ * to it, and this is a probe, not a failure the user needs to see.
+ */
+export function gitRootFor(cwd: string): string | undefined {
   try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-  } catch {}
-  // 6. cwd fallback
-  return cwd;
+    return out || undefined;
+  } catch { return undefined; }
 }

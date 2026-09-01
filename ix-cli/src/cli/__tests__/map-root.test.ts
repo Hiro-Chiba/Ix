@@ -49,7 +49,10 @@ describe("map root resolution", () => {
     expect(resolveMapRoot(undefined, nested)).toBe(realpathSync.native(root));
   });
 
-  it("uses the configured named workspace before the current git root", () => {
+  // `ix map` writes. A configured workspace outranking the repository the user
+  // is standing in means a bare `ix map` re-ingests a tree nothing on screen
+  // names -- and rewrites that workspace's map baseline on the way through.
+  it("maps the current repository, not the configured named workspace", () => {
     const selected = fixture();
     const repo = fixture();
     const nested = join(repo, "src");
@@ -66,10 +69,10 @@ describe("map root resolution", () => {
       "",
     ].join("\n"));
 
-    expect(resolveMapRoot(undefined, nested)).toBe(realpathSync.native(selected));
+    expect(resolveMapRoot(undefined, nested)).toBe(realpathSync.native(repo));
   });
 
-  it("uses the default workspace before the current git root", () => {
+  it("maps the current repository, not the default workspace", () => {
     const selected = fixture();
     const repo = fixture();
     const nested = join(repo, "src");
@@ -85,7 +88,42 @@ describe("map root resolution", () => {
       "",
     ].join("\n"));
 
-    expect(resolveMapRoot(undefined, nested)).toBe(realpathSync.native(selected));
+    expect(resolveMapRoot(undefined, nested)).toBe(realpathSync.native(repo));
+  });
+
+  it("prefers the registered workspace containing cwd over its git root", () => {
+    const repo = fixture();
+    const registered = join(repo, "packages", "inner");
+    const nested = join(registered, "src");
+    mkdirSync(nested, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    writeFileSync(join(home, ".ix", "config.yaml"), [
+      "endpoint: http://localhost:8090",
+      "workspaces:",
+      "  - workspace_id: inner-id",
+      "    workspace_name: inner",
+      `    root_path: ${registered}`,
+      "    default: true",
+      "",
+    ].join("\n"));
+
+    expect(resolveMapRoot(undefined, nested)).toBe(realpathSync.native(registered));
+  });
+
+  it("falls back to the default workspace when cwd has no local context", () => {
+    const selected = fixture();
+    const bare = fixture();
+    writeFileSync(join(home, ".ix", "config.yaml"), [
+      "endpoint: http://localhost:8090",
+      "workspaces:",
+      "  - workspace_id: selected-id",
+      "    workspace_name: selected",
+      `    root_path: ${selected}`,
+      "    default: true",
+      "",
+    ].join("\n"));
+
+    expect(resolveMapRoot(undefined, bare)).toBe(realpathSync.native(selected));
   });
 
   it.skipIf(process.platform === "win32")("canonicalizes a symlink before deriving workspace identity", () => {
