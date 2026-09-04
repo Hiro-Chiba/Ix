@@ -213,4 +213,5 @@ export function reportResolutionFailure(
 ): void {
   if (result.ambiguous) reportAmbiguousTarget(target, result.result, format, opts);
   else reportUnresolvedTarget(target, format);
+  process.exitCode = 1;
 }

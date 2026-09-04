@@ -29,7 +29,8 @@ so consumers can pass the flag unconditionally without a per-command lookup.
   does not exist is always `unresolved_target`. `locate` is the remaining
   exit-status exception tracked in #539.
   An ambiguous graph target is instead `ambiguous_target`, includes numbered
-  candidates, and exits zero because the candidates are a usable answer. (The
+  candidates, and exits non-zero because the requested graph operation could
+  not choose a target. (The
   backend spells a missing target `unknown_target` in its own JSON bodies; that
   is a wire detail and is translated on the way out, so a consumer never sees
   both.)

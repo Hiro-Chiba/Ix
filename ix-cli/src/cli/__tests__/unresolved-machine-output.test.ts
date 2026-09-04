@@ -112,7 +112,7 @@ describe("unresolved targets in machine formats", () => {
       ["overview", "Duplicate", "--format", "json"],
     );
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       error: "ambiguous_target",
       message: 'Ambiguous symbol "Duplicate".',
@@ -123,7 +123,7 @@ describe("unresolved targets in machine formats", () => {
     });
   });
 
-  it("keeps an out-of-range pick classified as ambiguity", async () => {
+  it("keeps an out-of-range pick classified as ambiguity and exits non-zero", async () => {
     search.mockResolvedValue([
       { id: "first-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/first.ts" } },
       { id: "second-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/second.ts" } },
@@ -134,7 +134,7 @@ describe("unresolved targets in machine formats", () => {
       ["overview", "Duplicate", "--pick", "3", "--format", "json"],
     );
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(1);
     const output = JSON.parse(result.stdout);
     expect(output.error).toBe("ambiguous_target");
     expect(output.diagnostics[0]).toEqual({
