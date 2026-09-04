@@ -69,8 +69,8 @@ describe("diff command supports scoped target", () => {
     expect(diffContent).toContain('command("diff <fromRev> <toRev> [target]")');
   });
 
-  it("uses resolveFileOrEntity for target resolution", () => {
-    expect(diffContent).toContain("resolveFileOrEntity");
+  it("uses resolveFileOrReport for target resolution", () => {
+    expect(diffContent).toContain("resolveFileOrReport");
   });
 
   it("passes resolved entity ID to diff API", () => {

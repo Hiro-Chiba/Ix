@@ -47,7 +47,6 @@ describe("ix diff — unresolved target", () => {
     process.exitCode = savedExitCode;
   });
 
-  // The symbol path: resolveEntityFull finds nothing.
   it("emits the shared slug and message as json for a symbol target", async () => {
     const result = await run(["diff", "3", "5", "DefinitelyMissing", "--format", "json"]);
 
@@ -57,9 +56,6 @@ describe("ix diff — unresolved target", () => {
     });
   });
 
-  // The file-like path: a target with an extension skips resolveEntityFull and
-  // goes through resolveFileOrEntity, which is a separate branch with its own
-  // copy of the record. Both were wrong; both must be right.
   it("emits the shared slug and message as json for a file-like target", async () => {
     const result = await run(["diff", "3", "5", "DefinitelyMissing.ts", "--format", "json"]);
 
@@ -77,14 +73,9 @@ describe("ix diff — unresolved target", () => {
     );
   });
 
-  // Deliberate scope boundary, not an oversight. Making `ix diff` exit non-zero
-  // is a breaking change for the plugins that call it (CONTRIBUTING -> CLI
-  // Standards -> Exit codes); ix-cursor-plugin's ix_diff tool routes on the
-  // exit status. That half is queued behind Ix #547. This test fails the moment
-  // someone adds the exit code without doing that work.
-  it("does not yet exit non-zero — that half is queued behind the plugin fixes", async () => {
+  it("exits non-zero for an unresolved target", async () => {
     await run(["diff", "3", "5", "DefinitelyMissing", "--format", "json"]);
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(1);
   });
 });
