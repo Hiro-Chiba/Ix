@@ -165,6 +165,23 @@ describe("ix mcp", () => {
     }]);
   });
 
+  it("preserves a structured JSON error when the CLI exits non-zero", async () => {
+    const error = JSON.stringify({ error: "invalid_map_path", message: "Path is outside the workspace." });
+    const client = await connect(async () => ({
+      ok: false,
+      stdout: error,
+      stderr: "Path is outside the workspace.",
+    }));
+
+    const result = await client.callTool({
+      name: "ix_map",
+      arguments: { file: "../outside.ts" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: error }]);
+  });
+
   it("keeps error-like source lines after a successful LLM record as data", async () => {
     const output = [
       "content target=fixture.ts lines=1",

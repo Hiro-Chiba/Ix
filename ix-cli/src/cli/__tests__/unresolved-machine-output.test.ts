@@ -20,6 +20,24 @@ vi.mock("../config.js", async (importOriginal) => {
 });
 
 type Register = (program: Command) => void;
+type LoadRegister = () => Promise<Register>;
+
+const UNRESOLVED_COMMANDS: ReadonlyArray<readonly [string, readonly string[], LoadRegister]> = [
+  ["context", ["context", "DefinitelyMissing"], async () => (await import("../commands/context.js")).registerContextCommand],
+  ["explain", ["explain", "DefinitelyMissing"], async () => (await import("../commands/explain.js")).registerExplainCommand],
+  ["read", ["read", "DefinitelyMissing"], async () => (await import("../commands/read.js")).registerReadCommand],
+  ["overview", ["overview", "DefinitelyMissing"], async () => (await import("../commands/overview.js")).registerOverviewCommand],
+  ["impact", ["impact", "DefinitelyMissing"], async () => (await import("../commands/impact.js")).registerImpactCommand],
+  ["contains", ["contains", "DefinitelyMissing"], async () => (await import("../commands/contains.js")).registerContainsCommand],
+  ["callers", ["callers", "DefinitelyMissing"], async () => (await import("../commands/callers.js")).registerCallersCommand],
+  ["callees", ["callees", "DefinitelyMissing"], async () => (await import("../commands/callers.js")).registerCallersCommand],
+  ["imports", ["imports", "DefinitelyMissing"], async () => (await import("../commands/imports.js")).registerImportsCommand],
+  ["imported-by", ["imported-by", "DefinitelyMissing"], async () => (await import("../commands/imports.js")).registerImportsCommand],
+  ["depends", ["depends", "DefinitelyMissing"], async () => (await import("../commands/depends.js")).registerDependsCommand],
+  ["trace", ["trace", "DefinitelyMissing"], async () => (await import("../commands/trace.js")).registerTraceCommand],
+  ["history", ["history", "DefinitelyMissing"], async () => (await import("../commands/history.js")).registerHistoryCommand],
+  ["diff", ["diff", "3", "5", "DefinitelyMissing"], async () => (await import("../commands/diff.js")).registerDiffCommand],
+];
 
 async function run(register: Register, args: string[]): Promise<{ stdout: string; stderr: string }> {
   const program = new Command();
@@ -29,11 +47,16 @@ async function run(register: Register, args: string[]): Promise<{ stdout: string
   const stderr: string[] = [];
   const log = vi.spyOn(console, "log").mockImplementation((...parts) => stdout.push(parts.join(" ")));
   const error = vi.spyOn(console, "error").mockImplementation((...parts) => stderr.push(parts.join(" ")));
+  const write = vi.spyOn(process.stderr, "write").mockImplementation(((part: string) => {
+    stderr.push(String(part).replace(/\n$/, ""));
+    return true;
+  }) as never);
   try {
     await program.parseAsync(args, { from: "user" });
   } finally {
     log.mockRestore();
     error.mockRestore();
+    write.mockRestore();
   }
   return { stdout: stdout.join("\n"), stderr: stderr.join("\n") };
 }
@@ -51,28 +74,31 @@ describe("unresolved targets in machine formats", () => {
     process.exitCode = savedExitCode;
   });
 
-  it.each([
-    ["context", async () => (await import("../commands/context.js")).registerContextCommand],
-    ["explain", async () => (await import("../commands/explain.js")).registerExplainCommand],
-    ["read", async () => (await import("../commands/read.js")).registerReadCommand],
-    ["overview", async () => (await import("../commands/overview.js")).registerOverviewCommand],
-    ["impact", async () => (await import("../commands/impact.js")).registerImpactCommand],
-    ["contains", async () => (await import("../commands/contains.js")).registerContainsCommand],
-    ["callers", async () => (await import("../commands/callers.js")).registerCallersCommand],
-    ["callees", async () => (await import("../commands/callers.js")).registerCallersCommand],
-    ["imports", async () => (await import("../commands/imports.js")).registerImportsCommand],
-    ["imported-by", async () => (await import("../commands/imports.js")).registerImportsCommand],
-    ["depends", async () => (await import("../commands/depends.js")).registerDependsCommand],
-    ["trace", async () => (await import("../commands/trace.js")).registerTraceCommand],
-    ["history", async () => (await import("../commands/history.js")).registerHistoryCommand],
-  ] as const)("returns JSON and a non-zero status from ix %s", async (command, loadRegister) => {
-    const result = await run(await loadRegister(), [command, "DefinitelyMissing", "--format", "json"]);
+  it.each(UNRESOLVED_COMMANDS)("returns JSON and a non-zero status from ix %s", async (_command, args, loadRegister) => {
+    const result = await run(await loadRegister(), [...args, "--format", "json"]);
 
     expect(process.exitCode).toBe(1);
     expect(JSON.parse(result.stdout)).toEqual({
       error: "unresolved_target",
       message: 'No entity found matching "DefinitelyMissing".',
     });
+  });
+
+  it.each(UNRESOLVED_COMMANDS)("returns LLM output and a non-zero status from ix %s", async (_command, args, loadRegister) => {
+    const result = await run(await loadRegister(), [...args, "--format", "llm"]);
+
+    expect(process.exitCode).toBe(1);
+    expect(result.stdout).toBe(
+      'error code=unresolved_target message="No entity found matching \\"DefinitelyMissing\\"."',
+    );
+  });
+
+  it.each(UNRESOLVED_COMMANDS)("keeps text stdout clean and exits non-zero from ix %s", async (_command, args, loadRegister) => {
+    const result = await run(await loadRegister(), [...args, "--format", "text"]);
+
+    expect(process.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('No entity found matching "DefinitelyMissing".');
   });
 
   it("reports ambiguous targets with candidates without claiming they are missing", async () => {
