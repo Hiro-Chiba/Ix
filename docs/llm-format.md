@@ -25,11 +25,14 @@ so consumers can pass the flag unconditionally without a per-command lookup.
   backslash-escaped and newline / carriage-return / tab are encoded as `\n` /
   `\r` / `\t`, so a record never spans more than one line.
 - **Errors:** a uniform `error code=<slug> message="..."` line in the same
-  format as data lines; the process still exits non-zero. A target that does
-  not exist is always `unresolved_target`, whichever command was asked —
-  `context`, `explain`, `read`, `locate`, `subsystems`, `trace`. (The backend
-  spells the same condition `unknown_target` in its own JSON bodies; that is a
-  wire detail and is translated on the way out, so a consumer never sees both.)
+  format as data lines; the process still exits non-zero. A graph target that
+  does not exist is always `unresolved_target`. `locate` is the remaining
+  exit-status exception tracked in #539.
+  An ambiguous graph target is instead `ambiguous_target`, includes numbered
+  candidates, and exits zero because the candidates are a usable answer. (The
+  backend spells a missing target `unknown_target` in its own JSON bodies; that
+  is a wire detail and is translated on the way out, so a consumer never sees
+  both.)
 
 ## Hierarchies
 
