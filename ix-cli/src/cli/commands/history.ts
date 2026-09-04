@@ -2,11 +2,10 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { resolveFileOrEntity, printResolved } from "../resolve.js";
+import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { relativePath } from "../format.js";
 import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
-import { reportUnresolvedTarget } from "../ui.js";
 
 /** Render an entity's provenance chain as llm records: a header then one `patch` row per revision. */
 export function renderHistoryLlm(
@@ -40,11 +39,8 @@ export function registerHistoryCommand(program: Command): void {
     .action(async (target: string, opts: { kind?: string; path?: string; pick?: number; format: string }) => {
       const client = new IxClient(getEndpoint());
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
-      const resolved = await resolveFileOrEntity(client, target, resolveOpts);
-      if (!resolved) {
-        reportUnresolvedTarget(target, opts.format);
-        return;
-      }
+      const resolved = await resolveFileOrReport(client, target, resolveOpts, opts.format);
+      if (!resolved) return;
 
       if (opts.format === "text") printResolved(resolved);
 

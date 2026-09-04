@@ -6,10 +6,9 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { formatEdgeResults, relativePath } from "../format.js";
 import { parsePickOption } from "../options.js";
-import { resolveFileOrEntity, printResolved } from "../resolve.js";
+import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
 import { llmLine } from "../llm.js";
-import { reportUnresolvedTarget } from "../ui.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,8 +25,8 @@ export function registerCallersCommand(program: Command): void {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
+      const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+      if (!target) return;
       if (opts.format === "text") printResolved(target);
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {
@@ -129,8 +128,8 @@ export function registerCallersCommand(program: Command): void {
       const client = new IxClient(getEndpoint());
       const calleeLimit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
+      const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+      if (!target) return;
       if (opts.format === "text") printResolved(target);
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {

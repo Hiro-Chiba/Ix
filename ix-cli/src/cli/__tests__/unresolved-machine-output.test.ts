@@ -1,12 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 
+const search = vi.hoisted(() => vi.fn());
+
 vi.mock("../../client/api.js", () => ({
   IxClient: class {
     async workspaceSystem() { return { systemId: null }; }
-    async search() { return []; }
+    async search(...args: unknown[]) { return search(...args); }
   },
 }));
+
+vi.mock("../config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config.js")>();
+  return {
+    ...actual,
+    readStitchScope: () => undefined,
+    writeStitchScope: vi.fn(),
+  };
+});
 
 type Register = (program: Command) => void;
 
@@ -33,6 +44,7 @@ describe("unresolved targets in machine formats", () => {
   beforeEach(() => {
     savedExitCode = process.exitCode;
     process.exitCode = undefined;
+    search.mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -60,6 +72,62 @@ describe("unresolved targets in machine formats", () => {
     expect(JSON.parse(result.stdout)).toEqual({
       error: "unresolved_target",
       message: 'No entity found matching "DefinitelyMissing".',
+    });
+  });
+
+  it("reports ambiguous targets with candidates without claiming they are missing", async () => {
+    search.mockResolvedValue([
+      { id: "first-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/first.ts" } },
+      { id: "second-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/second.ts" } },
+    ]);
+
+    const result = await run(
+      (await import("../commands/overview.js")).registerOverviewCommand,
+      ["overview", "Duplicate", "--format", "json"],
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      error: "ambiguous_target",
+      message: 'Ambiguous symbol "Duplicate".',
+      candidates: [
+        { id: "first-id", name: "Duplicate" },
+        { id: "second-id", name: "Duplicate" },
+      ],
+    });
+  });
+
+  it("keeps an out-of-range pick classified as ambiguity", async () => {
+    search.mockResolvedValue([
+      { id: "first-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/first.ts" } },
+      { id: "second-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/second.ts" } },
+    ]);
+
+    const result = await run(
+      (await import("../commands/overview.js")).registerOverviewCommand,
+      ["overview", "Duplicate", "--pick", "3", "--format", "json"],
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    const output = JSON.parse(result.stdout);
+    expect(output.error).toBe("ambiguous_target");
+    expect(output.diagnostics[0]).toEqual({
+      code: "pick_out_of_range",
+      message: "--pick 3 is out of range (1-2).",
+    });
+  });
+
+  it("reports both missing trace endpoints in one result", async () => {
+    const result = await run(
+      (await import("../commands/trace.js")).registerTraceCommand,
+      ["trace", "MissingFrom", "--to", "MissingTo", "--format", "json"],
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({
+      error: "unresolved_target",
+      message: 'No entities found matching "MissingFrom" or "MissingTo".',
+      targets: ["MissingFrom", "MissingTo"],
     });
   });
 });

@@ -2,9 +2,8 @@ import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { formatEdgeResults } from "../format.js";
-import { resolveFileOrEntity, printResolved } from "../resolve.js";
+import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { parsePickOption } from "../options.js";
-import { reportUnresolvedTarget } from "../ui.js";
 
 export function registerImportsCommand(program: Command): void {
   program
@@ -19,8 +18,8 @@ export function registerImportsCommand(program: Command): void {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
+      const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+      if (!target) return;
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] });
       formatEdgeResults(result.nodes.slice(0, limit), "imports", target.name, opts.format, target, "graph");
@@ -38,8 +37,8 @@ export function registerImportsCommand(program: Command): void {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
       const resolveOpts = { kind: opts.kind, pick: opts.pick };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { reportUnresolvedTarget(symbol, opts.format); return; }
+      const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+      if (!target) return;
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] });
       formatEdgeResults(result.nodes.slice(0, limit), "imported-by", target.name, opts.format, target, "graph");
